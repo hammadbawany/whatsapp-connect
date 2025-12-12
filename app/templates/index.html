@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WhatsApp Inbox</title>
+  <style>
+    body { font-family: Arial; display: flex; height: 100vh; margin: 0; }
+    #users { width: 30%; border-right: 1px solid #ccc; overflow-y: auto; padding: 20px; }
+    #chat { flex-grow: 1; display: flex; flex-direction: column; }
+    #messages { flex-grow: 1; padding: 20px; overflow-y: auto; }
+    #inputBox { padding: 10px; display: flex; border-top: 1px solid #ccc; }
+    #text { flex-grow: 1; }
+  </style>
+</head>
+
+<body>
+
+<div id="users"></div>
+
+<div id="chat">
+  <div id="messages"></div>
+
+  <div id="inputBox">
+    <input id="text" placeholder="Type message..." />
+    <button onclick="sendText()">Send</button>
+  </div>
+</div>
+
+<script>
+let currentPhone = null;
+
+async function loadUsers() {
+  let res = await fetch("/list_users");
+  let users = await res.json();
+  let html = "";
+  users.forEach(u => {
+    html += `<div onclick="openChat('${u.phone}')">${u.phone}</div>`;
+  });
+  document.getElementById("users").innerHTML = html;
+}
+
+async function openChat(phone) {
+  currentPhone = phone;
+  let res = await fetch("/history?phone=" + phone);
+  let msgs = await res.json();
+  let html = "";
+  msgs.forEach(m => {
+    html += `<div><b>${m.sender}:</b> ${m.message}</div>`;
+  });
+  document.getElementById("messages").innerHTML = html;
+}
+
+async function sendText() {
+  let text = document.getElementById("text").value;
+  await fetch("/send_text", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ phone: currentPhone, text })
+  });
+  document.getElementById("text").value = "";
+}
+</script>
+
+</body>
+</html>

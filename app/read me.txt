@@ -1,0 +1,23 @@
+work with main.py
+
+cd C:\Users\M.Hammad Bawany\Desktop\cs50w\connectwhatsapp\app
+set flask_debug=1
+set DATABASE_URL=postgresql://u8crgmufmb2vp9:p9eb3995b1650b4c908cb98ca407a7300106031951989ff30824c937b828fdeb9@ec2-3-214-33-144.compute-1.amazonaws.com/d388972uunvvuc
+
+set flask_app=app.py
+flask run
+
+
+
+pip install pyngrok
+ngrok config add-authtoken 2r4NqV2JTFUMVl4zu1tHtoBFK4m_7tMzApdLHdXDNiwJ4qKKz
+ngrok http 5000
+ngrok http --region=us --subdomain=lifafaymyapp 5000       
+
+
+Kill Connections
+SELECT pg_terminate_backend(pg_stat_activity.pid)
+FROM pg_stat_activity
+WHERE
+  datname = 'dd35tuc9bj7qmq'  -- replace with your actual DB name
+  AND pid <> pg_backend_pid();
