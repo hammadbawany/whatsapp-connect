@@ -1,4 +1,8 @@
 # app.py (trimmed/combined - replace your current app.py with this or merge carefully)
+from dotenv import load_dotenv
+load_dotenv()
+
+
 import os
 import requests
 import psycopg2
@@ -7,7 +11,13 @@ from flask import Flask, request, jsonify, session, redirect, url_for, render_te
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from db import get_conn  # assumes db.get_conn exists and DATABASE_URL set
+import tempfile
+from flask import Response
 
+
+
+print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
+print("BOOT PHONE:", os.getenv("WA_PHONE"))
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-this")
 VERIFY_TOKEN = "lifafay123"
@@ -34,51 +44,140 @@ def get_current_user():
     return u
 
 # ---------- Webhook verification ----------
-@app.route("/webhook", methods=["GET"])
-def verify():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return challenge, 200
-    return "Verification failed", 403
-
-# ---------- Webhook incoming messages & statuses ----------
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    data = request.get_json()
-    try:
-        entry = data.get("entry", [])[0]
-        change = entry.get("changes", [])[0]
-        value = change.get("value", {})
 
-        # Handle messages
-        for msg in value.get("messages", []) or []:
+    # =====================================================
+    # 1️⃣ WEBHOOK VERIFICATION (META SETUP)
+    # =====================================================
+    if request.method == "GET":
+        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
+
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+
+        return "Verification failed", 403
+
+
+    # =====================================================
+    # 2️⃣ INCOMING EVENTS (POST)
+    # =====================================================
+    data = request.get_json(silent=True) or {}
+
+    try:
+        entry = data.get("entry", [])
+        if not entry:
+            return "OK", 200
+
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return "OK", 200
+
+        value = changes[0].get("value", {})
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # =================================================
+        # A) INCOMING MESSAGES (TEXT / IMAGE)
+        # =================================================
+        messages = value.get("messages", [])
+
+        for msg in messages:
             try:
                 phone = msg.get("from")
-                text = msg.get("text", {}).get("body")
                 wa_id = msg.get("id")
+                msg_type = msg.get("type")
 
-                conn = get_conn()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO messages (user_phone, sender, message, timestamp, whatsapp_id)
-                    VALUES (%s, %s, %s, NOW(), %s)
-                """, (phone, "customer", text, wa_id))
-                conn.commit()
-                cur.close()
-                conn.close()
+                # ---------- TEXT ----------
+                if msg_type == "text":
+                    text = msg.get("text", {}).get("body")
 
-            except Exception as e:
-                print("DB Insert Error:", e)
+                    if phone and text:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                user_phone,
+                                sender,
+                                message,
+                                whatsapp_id,
+                                status
+                            )
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (
+                            phone,
+                            "customer",
+                            text,
+                            wa_id,
+                            "received"
+                        ))
 
-        return "OK", 200
+                # ---------- IMAGE ----------
+                elif msg_type == "image":
+                    media_id = msg.get("image", {}).get("id")
 
-    except Exception as e:
-        print("Webhook Parse Error:", e)
-        return "OK", 200
+                    if phone and media_id:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                user_phone,
+                                sender,
+                                media_type,
+                                media_id,
+                                whatsapp_id,
+                                status
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (
+                            phone,
+                            "customer",
+                            "image",
+                            media_id,
+                            wa_id,
+                            "received"
+                        ))
 
-# ---------- Auth routes ----------
+                # ---------- OTHER TYPES ----------
+                else:
+                    print("Ignored message type:", msg_type)
+
+            except Exception:
+                print("Message processing error")
+                traceback.print_exc()
+
+        # =================================================
+        # B) STATUS UPDATES (sent / delivered / read)
+        # =================================================
+        statuses = value.get("statuses", [])
+
+        for s in statuses:
+            try:
+                wa_id = s.get("id")
+                status = s.get("status")  # sent | delivered | read
+
+                if wa_id and status:
+                    cur.execute("""
+                        UPDATE messages
+                        SET status = %s
+                        WHERE whatsapp_id = %s
+                    """, (status, wa_id))
+
+            except Exception:
+                print("Status update error")
+                traceback.print_exc()
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+    except Exception:
+        print("Webhook fatal error")
+        traceback.print_exc()
+
+    return "OK", 200
+    # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
@@ -128,54 +227,134 @@ def typing():
 
 # ---------- API endpoints (list, history, send) ----------
 @app.route("/list_users")
-@login_required
 def list_users():
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT DISTINCT user_phone FROM messages ORDER BY timestamp DESC")
-    users = [{"phone": r["user_phone"]} for r in cur.fetchall()]
-    cur.close(); conn.close()
-    return jsonify(users)
+    try:
+        conn = get_conn()
+        cur = conn.cursor()  # DictCursor
+
+        cur.execute("""
+            SELECT user_phone, MAX(timestamp) AS last_msg
+            FROM messages
+            GROUP BY user_phone
+            ORDER BY last_msg DESC
+        """)
+
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        return jsonify([
+            {"phone": r["user_phone"]}
+            for r in rows
+        ])
+
+    except Exception as e:
+        print("LIST_USERS ERROR:", e)
+        return jsonify({"error": "internal error"}), 500
 
 @app.route("/history")
-@login_required
 def history():
     phone = request.args.get("phone")
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("""
-        SELECT id, sender, message, media_url, timestamp, status
-        FROM messages WHERE user_phone=%s ORDER BY id ASC
-    """, (phone,))
-    msgs = cur.fetchall()
-    cur.close(); conn.close()
-    # include typing state
-    typing_state = app.config.get("typing_states", {}).get(phone)
-    return jsonify({"messages": msgs, "typing": typing_state})
+    if not phone:
+        return jsonify([])
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                sender,
+                message,
+                media_type,
+                media_id,
+                status,
+                timestamp
+            FROM messages
+            WHERE user_phone = %s
+            ORDER BY timestamp ASC
+        """, (phone,))
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return jsonify([
+            {
+                "sender": r["sender"],
+                "message": r["message"],
+                "media_type": r["media_type"],
+                "media_id": r["media_id"],
+                "status": r["status"],
+                "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None
+            }
+            for r in rows
+        ])
+
+    except Exception as e:
+        print("HISTORY ERROR:", e)
+        return jsonify({"error": "history failed"}), 500
 
 @app.route("/send_text", methods=["POST"])
-@login_required
 def send_text():
     data = request.json
-    phone = data["phone"]
-    text = data["text"]
+    phone = data.get("phone")
+    text = data.get("text")
+
+    if not phone or not text:
+        return jsonify({"error": "missing data"}), 400
+
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": text}}
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
     r = requests.post(url, json=payload, headers=headers)
     resp = r.json()
 
-    # Save outgoing message and whatsapp_id if returned
+    # 🔴 IMPORTANT PART — SAVE MESSAGE LOCALLY
     wa_id = None
-    if isinstance(resp, dict) and resp.get("messages"):
-        wa_id = resp["messages"][0].get("id")
+    try:
+        wa_id = resp["messages"][0]["id"]
+    except:
+        pass
 
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn()
+    cur = conn.cursor()
+
     cur.execute("""
-        INSERT INTO messages (user_phone, sender, message, media_url, timestamp, whatsapp_id, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (phone, "agent", text, None, datetime.utcnow(), wa_id, "sent"))
-    conn.commit(); cur.close(); conn.close()
+        INSERT INTO messages (
+            user_phone,
+            sender,
+            message,
+            whatsapp_id,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        phone,
+        "agent",
+        text,
+        wa_id,
+        "sent"
+    ))
 
-    return jsonify(resp)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"success": True})
+
 
 @app.route("/send_media", methods=["POST"])
 @login_required
@@ -267,3 +446,205 @@ def debug_users():
     cols = cur.fetchall()
     cur.close(); conn.close()
     return jsonify(cols)
+
+def upload_media_to_whatsapp(file_path):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/media"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+    }
+
+    files = {
+        "file": open(file_path, "rb"),
+        "type": (None, "image/png"),
+        "messaging_product": (None, "whatsapp")
+    }
+
+    response = requests.post(url, headers=headers, files=files)
+    data = response.json()
+
+    if "id" not in data:
+        raise Exception(f"Media upload failed: {data}")
+
+    return data["id"]  # media_id
+
+def send_whatsapp_image(phone, media_id, caption=None):
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {
+            "id": media_id
+        }
+    }
+
+    if caption:
+        payload["image"]["caption"] = caption
+
+    response = requests.post(url, headers=headers, json=payload)
+
+    if response.status_code != 200:
+        raise Exception(f"Send image failed: {response.text}")
+
+@app.route("/send_design", methods=["POST"])
+def send_design():
+    import traceback
+    try:
+        print("---- SEND DESIGN START ----")
+
+        phone = request.form.get("phone")
+        caption = request.form.get("caption", "")
+        file = request.files.get("file")
+
+        print("PHONE:", phone)
+        print("CAPTION:", caption)
+        print("FILE:", file)
+
+        if not phone or not file:
+            print("MISSING DATA")
+            return jsonify({"error": "missing data"}), 400
+
+        print("MIMETYPE:", file.mimetype)
+
+        # ⚠️ WhatsApp does NOT support SVG
+        if file.mimetype == "image/svg+xml":
+            print("SVG UPLOAD BLOCKED")
+            return jsonify({"error": "SVG not supported"}), 400
+
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        file.save(tmp.name)
+
+        print("TEMP FILE SAVED:", tmp.name)
+
+        upload_url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/media"
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+
+        with open(tmp.name, "rb") as f:
+            files = {
+                "file": (
+                    file.filename,
+                    f,
+                    file.mimetype
+                )
+            }
+
+            data = {
+                "messaging_product": "whatsapp",
+                "type": "image"
+            }
+
+            upload_resp = requests.post(
+                upload_url,
+                headers=headers,
+                files=files,
+                data=data
+            )
+
+        print("UPLOAD STATUS:", upload_resp.status_code)
+        upload_json = upload_resp.json()
+        print("UPLOAD RESPONSE:", upload_json)
+
+        if "id" not in upload_json:
+            print("UPLOAD FAILED")
+            return jsonify(upload_json), 500
+
+        media_id = upload_json["id"]
+        print("MEDIA ID:", media_id)
+
+        msg_url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "image",
+            "image": {"id": media_id, "caption": caption}
+        }
+
+        msg_resp = requests.post(
+            msg_url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                "Content-Type": "application/json"
+            }
+        )
+
+        print("MESSAGE STATUS:", msg_resp.status_code)
+        msg_json = msg_resp.json()
+        print("MESSAGE RESPONSE:", msg_json)
+
+        wa_id = msg_json.get("messages", [{}])[0].get("id")
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO messages
+            (user_phone, sender, media_type, media_id, message, whatsapp_id, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            phone,
+            "agent",
+            "image",
+            media_id,
+            caption,
+            wa_id,
+            "sent"
+        ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print("---- SEND DESIGN SUCCESS ----")
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print("❌ SEND DESIGN ERROR")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/media/<media_id>")
+def get_media(media_id):
+    try:
+        content = download_whatsapp_media(media_id)
+        return Response(content, mimetype="image/jpeg")
+    except Exception as e:
+        print("Media fetch error:", e)
+        return "", 404
+
+
+def download_whatsapp_media(media_id):
+    """
+    Downloads media from WhatsApp Cloud API and
+    returns raw bytes + content-type
+    """
+
+    # Step 1: Get media URL
+    meta_url = f"https://graph.facebook.com/v20.0/{media_id}"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+    }
+
+    meta_resp = requests.get(meta_url, headers=headers)
+    meta_json = meta_resp.json()
+
+    if "url" not in meta_json:
+        raise Exception(f"Failed to get media URL: {meta_json}")
+
+    media_url = meta_json["url"]
+
+    # Step 2: Download actual media
+    media_resp = requests.get(media_url, headers=headers)
+
+    content_type = media_resp.headers.get("Content-Type", "image/jpeg")
+
+    return media_resp.content, content_type
