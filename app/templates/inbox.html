@@ -1,162 +1,232 @@
 <!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8">
+<html lang="en">
+<head>
+<meta charset="UTF-8">
 <title>WhatsApp Inbox</title>
+
 <style>
-  body{margin:0;font-family:Arial;height:100vh;display:flex}
-  #users{width:26%;background:#f6f6f6;border-right:1px solid #ddd;overflow:auto}
-  #users h2{margin:0;padding:12px;background:#eee}
-  .user-item{padding:12px;border-bottom:1px solid #eaeaea;cursor:pointer}
-  .user-item.active{background:#dff3ff}
-  #right{flex:1;display:flex;flex-direction:column}
-  #header{padding:12px;border-bottom:1px solid #ddd;background:#fafafa;display:flex;justify-content:space-between;align-items:center}
-  #messages{flex:1;padding:16px;overflow:auto;background:#f7f7f7;display:flex;flex-direction:column}
-  .message{max-width:70%;padding:10px;border-radius:8px;margin:8px 0;line-height:1.3}
-  .customer{background:white;align-self:flex-start;border:1px solid #ddd}
-  .agent{background:#dcf8c6;align-self:flex-end}
-  .meta{font-size:11px;color:#666;margin-top:6px;display:flex;align-items:center;gap:8px}
-  .tick{font-weight:700;color:#0b8457}
-  #input{display:flex;padding:12px;border-top:1px solid #ddd;background:#fff}
-  #msg{flex:1;padding:10px;border:1px solid #ccc;border-radius:6px}
-  #send{margin-left:8px;padding:10px 14px;background:#128C7E;color:#fff;border:none;border-radius:6px;cursor:pointer}
-  #agentsList{font-size:13px}
-  img.preview{max-width:300px;border-radius:6px;margin-top:6px}
-  #typing{font-size:13px;color:#555;padding:6px 12px}
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    height: 100vh;
+    display: flex;
+    background: #ece5dd;
+}
+#users {
+    width: 28%;
+    background: #f0f0f0;
+    border-right: 1px solid #ccc;
+    overflow-y: auto;
+}
+#users h2 {
+    margin: 0;
+    padding: 15px;
+    background: #ededed;
+    border-bottom: 1px solid #ccc;
+}
+.user-item {
+    padding: 14px;
+    cursor: pointer;
+    border-bottom: 1px solid #ddd;
+}
+.user-item:hover { background: #e5e5e5; }
+.user-item.active { background: #d9fdd3; }
+
+#chatArea {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+#chatHeader {
+    padding: 15px;
+    background: #ededed;
+    border-bottom: 1px solid #ccc;
+    font-weight: bold;
+}
+#messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+.message {
+    max-width: 65%;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    line-height: 1.4;
+}
+.customer {
+    background: white;
+    align-self: flex-start;
+    border: 1px solid #ccc;
+}
+.agent {
+    background: #dcf8c6;
+    align-self: flex-end;
+}
+.message img {
+    max-width: 240px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+#inputBox {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background: #f0f0f0;
+    border-top: 1px solid #ccc;
+}
+#msgInput {
+    flex: 1;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid #bbb;
+}
+#sendBtn, #sendDesignBtn {
+    margin-left: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: none;
+    color: white;
+    cursor: pointer;
+}
+#sendBtn { background: #128c7e; }
+#sendDesignBtn { background: #075e54; }
+#designFile { margin-left: 8px; }
 </style>
 </head>
+
 <body>
+
+<!-- LEFT PANEL -->
 <div id="users">
-  <h2>Chats</h2>
-  <div id="userList"></div>
-  <hr/>
-  <div style="padding:8px"><strong>Agents</strong><div id="agentsList"></div></div>
+    <h2>Chats</h2>
+    <div id="userList"></div>
 </div>
 
-<div id="right">
-  <div id="header">
-    <div id="chatTitle">Select a chat</div>
-    <div>
-      <button onclick="location='/logout'">Logout</button>
+<!-- RIGHT PANEL -->
+<div id="chatArea">
+    <div id="chatHeader">Select a chat</div>
+    <div id="messages"></div>
+
+    <div id="inputBox">
+        <input id="msgInput" placeholder="Type a message..." />
+        <button id="sendBtn" onclick="sendText()">Send</button>
+
+        <input type="file" id="designFile" accept="image/png,image/jpeg,image/svg+xml">
+        <button id="sendDesignBtn" onclick="sendDesign()">Send Design</button>
     </div>
-  </div>
-
-  <div id="messages"></div>
-
-  <div id="typing"></div>
-
-  <div id="input">
-    <input id="msg" placeholder="Type a message..." onkeydown="userTyping()" />
-    <button id="send" onclick="sendText()">Send</button>
-  </div>
 </div>
 
 <script>
 let currentPhone = null;
-let currentUserDiv = null;
-let typingTimer = null;
+let activeUserDiv = null;
 
-// fetch agents presence
-async function loadAgents(){
-  const res = await fetch('/agents');
-  const data = await res.json();
-  const el = document.getElementById('agentsList');
-  el.innerHTML = data.map(a => `<div>${a.username} ${a.online?'<span style="color:green">●</span>':'<span style="color:#aaa">●</span>'}</div>`).join('');
+/* ---------------- USERS LIST ---------------- */
+async function loadUsers() {
+    const res = await fetch("/list_users");
+    const users = await res.json();
+
+    let html = "";
+    users.forEach(u => {
+        html += `<div class="user-item" onclick="openChat('${u.phone}', this)">
+                    ${u.phone}
+                 </div>`;
+    });
+    document.getElementById("userList").innerHTML = html;
 }
 
-// load users
-async function loadUsers(){
-  const res = await fetch('/list_users');
-  const list = await res.json();
-  const area = document.getElementById('userList');
-  area.innerHTML = list.map(u => `<div class="user-item" onclick="openChat('${u.phone}', this)">${u.phone}</div>`).join('');
+/* ---------------- OPEN CHAT ---------------- */
+async function openChat(phone, el) {
+    currentPhone = phone;
+
+    if (activeUserDiv) activeUserDiv.classList.remove("active");
+    activeUserDiv = el;
+    if (el) el.classList.add("active");
+
+    document.getElementById("chatHeader").innerText = phone;
+
+    const res = await fetch("/history?phone=" + phone);
+    const msgs = await res.json();
+
+    let html = "";
+
+    msgs.forEach(m => {
+        let ticks = "";
+
+        if (m.sender === "agent") {
+            if (m.status === "sent") ticks = "✔";
+            else if (m.status === "delivered") ticks = "✔✔";
+            else if (m.status === "read") ticks = "<span style='color:#4fc3f7'>✔✔</span>";
+        }
+
+        if (m.media_type === "image") {
+            html += `
+                <div class="message ${m.sender}">
+                    <img src="/media/${m.media_id}">
+                    ${m.message ? `<div>${m.message}</div>` : ""}
+                    <div style="font-size:11px;text-align:right;">${ticks}</div>
+                </div>`;
+        } else {
+            html += `
+                <div class="message ${m.sender}">
+                    ${m.message || ""}
+                    <div style="font-size:11px;text-align:right;">${ticks}</div>
+                </div>`;
+        }
+    });
+
+    const box = document.getElementById("messages");
+    box.innerHTML = html;
+    box.scrollTop = box.scrollHeight;
 }
 
-// open chat and load history
-async function openChat(phone, el){
-  currentPhone = phone;
-  if(currentUserDiv) currentUserDiv.classList.remove('active');
-  currentUserDiv = el; el.classList.add('active');
-  document.getElementById('chatTitle').innerText = phone;
-  await refreshChat();
-  // clear typing state
-  document.getElementById('typing').innerText = '';
+/* ---------------- SEND TEXT ---------------- */
+async function sendText() {
+    if (!currentPhone) return alert("Select a chat first");
+
+    const text = msgInput.value.trim();
+    if (!text) return;
+
+    await fetch("/send_text", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ phone: currentPhone, text })
+    });
+
+    msgInput.value = "";
+    openChat(currentPhone, activeUserDiv);
 }
 
-// refresh chat messages and typing
-async function refreshChat(){
-  if(!currentPhone) return;
-  const res = await fetch('/history?phone=' + currentPhone);
-  const j = await res.json();
-  const msgs = j.messages || j;
-  const messagesEl = document.getElementById('messages');
-  messagesEl.innerHTML = msgs.map(m => renderMessage(m)).join('');
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  // show typing
-  if(j.typing && j.typing.typing){
-    document.getElementById('typing').innerText = "Agent is typing...";
-  } else {
-    document.getElementById('typing').innerText = "";
-  }
+/* ---------------- SEND DESIGN ---------------- */
+async function sendDesign() {
+    if (!currentPhone) return alert("Select a chat first");
+
+    const file = designFile.files[0];
+    if (!file) return alert("Select a file");
+
+    const formData = new FormData();
+    formData.append("phone", currentPhone);
+    formData.append("file", file);
+    formData.append("caption", "Please review your design");
+
+    await fetch("/send_design", { method: "POST", body: formData });
+
+    designFile.value = "";
+    openChat(currentPhone, activeUserDiv);
 }
 
-// render single message html
-function renderMessage(m){
-  const when = new Date(m.timestamp).toLocaleString();
-  const cls = m.sender === 'agent' ? 'agent' : 'customer';
-  const body = m.message ? escapeHtml(m.message) : '';
-  let mediaHtml = '';
-  if(m.media_url){
-    // if media_url looks like an S3/http link, show preview; if it's a media id, show a placeholder link to download endpoint
-    const url = m.media_url.startsWith('http') ? m.media_url : `/media/download/${m.media_url}`;
-    mediaHtml = `<div><img class="preview" src="${url}" /></div>`;
-  }
-  // ticks for agent messages
-  let tick = '';
-  if(m.sender === 'agent'){
-    if(m.status === 'read') tick = '<span class="tick">✔✔</span>';
-    else if(m.status === 'delivered') tick = '<span class="tick">✔✔</span>';
-    else if(m.status === 'sent') tick = '<span class="tick">✔</span>';
-    else tick = '<span class="tick">•</span>';
-  }
-  return `<div class="message ${cls}">${body}${mediaHtml}<div class="meta">${when} ${tick}</div></div>`;
-}
+/* ---------------- AUTO REFRESH ---------------- */
+setInterval(() => {
+    if (currentPhone && activeUserDiv) {
+        openChat(currentPhone, activeUserDiv);
+    }
+}, 2000);
 
-function escapeHtml(text){
-  if(!text) return '';
-  return text.replace(/[&<>"']/g, function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];});
-}
-
-// send text
-async function sendText(){
-  const input = document.getElementById('msg');
-  const text = input.value.trim();
-  if(!currentPhone) return alert('Select a chat');
-  if(!text) return;
-  await fetch('/send_text', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:currentPhone,text})});
-  input.value=''; refreshChat();
-}
-
-// typing behaviour
-function userTyping(){
-  if(!currentPhone) return;
-  // send typing true
-  fetch('/typing', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone:currentPhone,typing:true})});
-  clearTimeout(typingTimer);
-  typingTimer = setTimeout(()=> {
-    fetch('/typing', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone:currentPhone,typing:false})});
-  }, 2000);
-}
-
-// presence heartbeat (every 25s)
-setInterval(()=> {
-  fetch('/presence/heartbeat', {method:'POST'}).then(()=> loadAgents());
-}, 25000);
-
-// auto-refresh messages every 2s
-setInterval(()=> { refreshChat(); loadUsers(); }, 2000);
-
-// initial load
 loadUsers();
-loadAgents();
 </script>
-</body></html>
+
+</body>
+</html>
