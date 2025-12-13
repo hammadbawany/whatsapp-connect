@@ -2,7 +2,7 @@ work with main.py
 
 cd C:\Users\M.Hammad Bawany\Desktop\cs50w\connectwhatsapp\app
 set flask_debug=1
-set DATABASE_URL=postgresql://u8crgmufmb2vp9:p9eb3995b1650b4c908cb98ca407a7300106031951989ff30824c937b828fdeb9@ec2-3-214-33-144.compute-1.amazonaws.com/d388972uunvvuc
+set DATABASE_URL=postgresql://uij4s6frl85hn:pbf3f7e203c24467d08b708c2bc29272815a92ed70c102d6a2293a32d1b5a3b42@c9ffqidprriprp.cluster-czz5s0kz4scl.eu-west-1.rds.amazonaws.com/d77um06l256343
 
 set flask_app=app.py
 flask run
@@ -12,7 +12,7 @@ flask run
 pip install pyngrok
 ngrok config add-authtoken 2r4NqV2JTFUMVl4zu1tHtoBFK4m_7tMzApdLHdXDNiwJ4qKKz
 ngrok http 5000
-ngrok http --region=us --subdomain=lifafaymyapp 5000       
+ngrok http --region=us --subdomain=lifafaymyapp 5000
 
 
 Kill Connections
