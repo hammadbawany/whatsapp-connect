@@ -48,40 +48,35 @@ def verify():
 def webhook():
     data = request.get_json()
     try:
-        # handle incoming messages
         entry = data.get("entry", [])[0]
         change = entry.get("changes", [])[0]
         value = change.get("value", {})
-        # messages
-        for msg in value.get("messages", []) or []:
-            phone = msg.get("from")
-            text = msg.get("text", {}).get("body", "")
-            wa_id = msg.get("id")
-            media_url = None
-            if msg.get("image"):
-                # if image, link provided may require media fetch - in many webhook images not direct link
-                # We record the mime reference or later download URL
-                media_url = msg.get("image", {}).get("id")  # store media id for later fetch
-            conn = get_conn(); cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO messages (user_phone, sender, message, media_url, timestamp, whatsapp_id, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (phone, "customer", text, media_url, datetime.utcnow(), wa_id, "received"))
-            conn.commit(); cur.close(); conn.close()
 
-        # statuses (delivery/read echoes)
-        for st in value.get("statuses", []) or []:
-            wa_id = st.get("id")
-            status = st.get("status")  # delivered, read, sent, failed
-            # Update message status by whatsapp_id
-            conn = get_conn(); cur = conn.cursor()
-            cur.execute("UPDATE messages SET status=%s WHERE whatsapp_id=%s", (status, wa_id))
-            conn.commit(); cur.close(); conn.close()
+        # Handle messages
+        for msg in value.get("messages", []) or []:
+            try:
+                phone = msg.get("from")
+                text = msg.get("text", {}).get("body")
+                wa_id = msg.get("id")
+
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO messages (user_phone, sender, message, timestamp, whatsapp_id)
+                    VALUES (%s, %s, %s, NOW(), %s)
+                """, (phone, "customer", text, wa_id))
+                conn.commit()
+                cur.close()
+                conn.close()
+
+            except Exception as e:
+                print("DB Insert Error:", e)
+
+        return "OK", 200
 
     except Exception as e:
-        print("Webhook Error:", e)
-
-    return "OK", 200
+        print("Webhook Parse Error:", e)
+        return "OK", 200
 
 # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
