@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from db import get_conn  # assumes db.get_conn exists and DATABASE_URL set
 import tempfile
 from flask import Response
-
+import traceback 
 
 
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
