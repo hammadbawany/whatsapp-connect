@@ -1072,28 +1072,18 @@ def update_quick_reply(id):
              return jsonify({"error": "Shortcut name already taken"}), 400
         return jsonify({"error": "Failed to update"}), 500
 
-@app.route("/whatsapp/connect")
+@app.route("/wh@app.route("/whatsapp/connect")
 @login_required
 def whatsapp_connect():
-    # 1. Configuration
     fb_app_id = os.getenv("FB_APP_ID")
-
-    # 🔴 DEBUG PRINT
-    print(f"DEBUG: My App ID is: '{fb_app_id}'")
-
-    if not fb_app_id:
-        return "Error: FB_APP_ID is missing in .env file", 500
-    # This URL must match exactly what you put in Meta App Dashboard > Facebook Login > Settings
     redirect_uri = url_for("whatsapp_callback", _external=True, _scheme='https')
-
-    # 2. Random state string to prevent CSRF attacks
-    state = "some_random_security_string"
+    state = "security_token_123"
     session["oauth_state"] = state
 
-    # 3. Permissions required for Embedded Signup
-    scope = "whatsapp_business_management,whatsapp_business_messaging"
+    # 🟢 UPDATE: Added 'business_management' to the scope
+    # This allows us to query 'me/businesses' to find the WABA
+    scope = "whatsapp_business_management,whatsapp_business_messaging,business_management"
 
-    # 4. Build URL
     url = (
         "https://www.facebook.com/v19.0/dialog/oauth"
         f"?client_id={fb_app_id}"
@@ -1104,7 +1094,6 @@ def whatsapp_connect():
     )
 
     return redirect(url)
-
 @app.route("/whatsapp/callback")
 @login_required
 def whatsapp_callback():
