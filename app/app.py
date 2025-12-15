@@ -1077,6 +1077,12 @@ def update_quick_reply(id):
 def whatsapp_connect():
     # 1. Configuration
     fb_app_id = os.getenv("FB_APP_ID")
+
+    # 🔴 DEBUG PRINT
+    print(f"DEBUG: My App ID is: '{fb_app_id}'")
+
+    if not fb_app_id:
+        return "Error: FB_APP_ID is missing in .env file", 500
     # This URL must match exactly what you put in Meta App Dashboard > Facebook Login > Settings
     redirect_uri = url_for("whatsapp_callback", _external=True, _scheme='https')
 
@@ -1141,6 +1147,7 @@ def setup_whatsapp_business(access_token):
     # A. Get WABA ID
     # Note: A user might have multiple WABAs. Here we pick the first one for simplicity.
     waba_resp = requests.get("https://graph.facebook.com/v19.0/me/whatsapp_business_accounts", headers=headers).json()
+    print("DEBUG WABA RESPONSE:", waba_resp)
 
     if not waba_resp.get("data"):
         return "No WhatsApp Business Account found on this Facebook account.", 400
@@ -1187,6 +1194,7 @@ def fetch_assets():
         "https://graph.facebook.com/v19.0/me/whatsapp_business_accounts",
         headers={"Authorization": f"Bearer {token}"}
     ).json()
+    print("DEBUG WABA RESPONSE:", wabas)
 
     waba_id = wabas["data"][0]["id"]
 
