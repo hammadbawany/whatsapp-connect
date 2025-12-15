@@ -1097,39 +1097,46 @@ def whatsapp_connect():
 @app.route("/whatsapp/callback")
 @login_required
 def whatsapp_callback():
-    # 1. Verify State (Security)
-    if request.args.get("state") != session.get("oauth_state"):
-        return "Error: State mismatch. Possible CSRF attack.", 403
-
-    code = request.args.get("code")
-    fb_app_id = os.getenv("FB_APP_ID")
-    fb_app_secret = os.getenv("FB_APP_SECRET")
-    redirect_uri = url_for("whatsapp_callback", _external=True, _scheme='https')
-
-    # 2. Exchange Code for Access Token
     try:
-        token_resp = requests.get(
-            "https://graph.facebook.com/v19.0/oauth/access_token",
-            params={
-                "client_id": fb_app_id,
-                "client_secret": fb_app_secret,
-                "redirect_uri": redirect_uri,
-                "code": code
-            }
-        ).json()
+        # 1. Check for Error from Facebook
+        if request.args.get("error"):
+            return f"Facebook Error: {request.args.get('error_description')}", 400
 
-        if "error" in token_resp:
-            return jsonify(token_resp), 400
+        # 2. Get Code
+        code = request.args.get("code")
+        if not code:
+            return "Error: No code received from Facebook.", 400
 
-        access_token = token_resp["access_token"]
+        # 3. Exchange Code for Token
+        fb_app_id = os.getenv("FB_APP_ID")
+        fb_app_secret = os.getenv("FB_APP_SECRET")
+        # Ensure this matches your Connect URL exactly (https vs http)
+        redirect_uri = url_for("whatsapp_callback", _external=True, _scheme='https')
 
-        # 3. Fetch WABA and Phone Info
+        token_url = (
+            f"https://graph.facebook.com/v19.0/oauth/access_token"
+            f"?client_id={fb_app_id}"
+            f"&client_secret={fb_app_secret}"
+            f"&redirect_uri={redirect_uri}"
+            f"&code={code}"
+        )
+
+        resp = requests.get(token_url)
+        token_data = resp.json()
+
+        if "error" in token_data:
+            return jsonify(token_data), 400
+
+        access_token = token_data["access_token"]
+
+        # 4. Run Setup (with error catching)
         return setup_whatsapp_business(access_token)
 
     except Exception as e:
+        import traceback
         traceback.print_exc()
-        return f"Setup failed: {str(e)}", 500
-
+        return f"CRITICAL ERROR: {str(e)}", 500
+        
 def setup_whatsapp_business(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
 
