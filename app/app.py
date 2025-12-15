@@ -1144,46 +1144,77 @@ def whatsapp_callback():
 def setup_whatsapp_business(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
 
-    # A. Get WABA ID
-    # Note: A user might have multiple WABAs. Here we pick the first one for simplicity.
-    waba_resp = requests.get("https://graph.facebook.com/v19.0/me/whatsapp_business_accounts", headers=headers).json()
-    print("DEBUG WABA RESPONSE:", waba_resp)
+    try:
+        # 1. Get the Business Managers this user belongs to
+        # We also ask for the WABAs owned by these businesses
+        print("DEBUG: Fetching Businesses...")
 
-    if not waba_resp.get("data"):
-        return "No WhatsApp Business Account found on this Facebook account.", 400
+        # New API Path: Get Businesses -> Then Get Client/Owned WABAs
+        businesses_resp = requests.get(
+            "https://graph.facebook.com/v20.0/me/businesses",
+            headers=headers,
+            params={"fields": "id,name,owned_whatsapp_business_accounts,client_whatsapp_business_accounts"}
+        ).json()
 
-    waba_id = waba_resp["data"][0]["id"]
+        print("DEBUG BUSINESS RESP:", businesses_resp)
 
-    # B. Get Phone Number ID
-    phone_resp = requests.get(f"https://graph.facebook.com/v19.0/{waba_id}/phone_numbers", headers=headers).json()
+        if "error" in businesses_resp:
+            return f"Meta API Error: {businesses_resp['error']['message']}", 400
 
-    if not phone_resp.get("data"):
-        return "No Phone Number found in this WABA.", 400
+        if not businesses_resp.get("data"):
+            return "No Business Manager found. Please create a Meta Business Portfolio first at business.facebook.com", 400
 
-    phone_data = phone_resp["data"][0]
-    phone_number_id = phone_data["id"]
-    display_phone = phone_data["display_phone_number"]
+        # 2. Find the first WABA available
+        waba_id = None
+        waba_name = "Unknown"
 
-    # C. 🟢 CRITICAL: Subscribe App to WABA Webhooks
-    # This tells Meta: "Send events for this WABA to my app"
-    sub_url = f"https://graph.facebook.com/v19.0/{waba_id}/subscribed_apps"
-    sub_resp = requests.post(sub_url, headers=headers)
+        for business in businesses_resp["data"]:
+            # Check Owned WABAs
+            if "owned_whatsapp_business_accounts" in business:
+                waba_data = business["owned_whatsapp_business_accounts"]["data"]
+                if waba_data:
+                    waba_id = waba_data[0]["id"]
+                    waba_name = waba_data[0].get("name", "Unknown")
+                    break
 
-    if sub_resp.status_code != 200:
-        print("Webhook Subscription Failed:", sub_resp.json())
-        # Continue anyway, but log it.
+            # Check Client WABAs (if they are an agency)
+            if "client_whatsapp_business_accounts" in business:
+                waba_data = business["client_whatsapp_business_accounts"]["data"]
+                if waba_data:
+                    waba_id = waba_data[0]["id"]
+                    waba_name = waba_data[0].get("name", "Unknown")
+                    break
 
-    # D. 🟢 CRITICAL: Register the Phone Number (Makes it live)
-    # This is often needed if the number is new.
-    reg_url = f"https://graph.facebook.com/v19.0/{phone_number_id}/register"
-    reg_payload = {"messaging_product": "whatsapp", "pin": "123456"} # You might need to ask user for PIN if 2FA is on
-    requests.post(reg_url, headers=headers, json=reg_payload)
+        if not waba_id:
+            return "Found Business Manager, but no WhatsApp Business Account (WABA) inside it.", 400
 
-    # E. Save to Database
-    save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
+        print(f"DEBUG: Found WABA ID: {waba_id} ({waba_name})")
 
-    return redirect("/inbox")
+        # 3. Get Phone Number ID from this WABA
+        phone_resp = requests.get(
+            f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers",
+            headers=headers
+        ).json()
 
+        if not phone_resp.get("data"):
+            return f"WABA Found ({waba_name}), but no Phone Numbers are registered.", 400
+
+        phone_data = phone_resp["data"][0]
+        phone_number_id = phone_data["id"]
+        display_phone = phone_data["display_phone_number"]
+
+        # 4. Subscribe App to Webhooks (Critical)
+        sub_url = f"https://graph.facebook.com/v20.0/{waba_id}/subscribed_apps"
+        requests.post(sub_url, headers=headers)
+
+        # 5. Save to Database
+        save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
+
+        return redirect("/inbox")
+
+    except Exception as e:
+        traceback.print_exc()
+        return f"Setup Logic Failed: {str(e)}", 500
 
 
 @app.route("/whatsapp/fetch-assets")
