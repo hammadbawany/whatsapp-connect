@@ -1072,7 +1072,7 @@ def update_quick_reply(id):
              return jsonify({"error": "Shortcut name already taken"}), 400
         return jsonify({"error": "Failed to update"}), 500
 
-@app.route("/wh@app.route("/whatsapp/connect")
+@app.route("/whatsapp/connect")
 @login_required
 def whatsapp_connect():
     fb_app_id = os.getenv("FB_APP_ID")
@@ -1094,6 +1094,7 @@ def whatsapp_connect():
     )
 
     return redirect(url)
+
 @app.route("/whatsapp/callback")
 @login_required
 def whatsapp_callback():
@@ -1136,7 +1137,7 @@ def whatsapp_callback():
         import traceback
         traceback.print_exc()
         return f"CRITICAL ERROR: {str(e)}", 500
-        
+
 def setup_whatsapp_business(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
 
