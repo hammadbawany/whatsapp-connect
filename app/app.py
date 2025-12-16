@@ -1148,15 +1148,14 @@ def setup_whatsapp_business(access_token):
     try:
         print("DEBUG: Inspecting Token for WABA IDs...")
 
-        # 1. Inspect the Token (Debug Token)
-        # We need to know which WABA the user selected in the popup
+        # 1️⃣ Debug token to extract granular scopes
         debug_url = (
             f"https://graph.facebook.com/v20.0/debug_token"
             f"?input_token={access_token}"
-            f"&access_token={fb_app_id}|{fb_app_secret}" # App Token
+            f"&access_token={fb_app_id}|{fb_app_secret}"
         )
-        debug_resp = requests.get(debug_url).json()
 
+        debug_resp = requests.get(debug_url).json()
         print("DEBUG TOKEN RESP:", debug_resp)
 
         if "error" in debug_resp:
@@ -1165,57 +1164,73 @@ def setup_whatsapp_business(access_token):
         data = debug_resp.get("data", {})
         granular_scopes = data.get("granular_scopes", [])
 
-        # 2. Find the WABA ID in the scopes
-        waba_id = None
-
+        # 2️⃣ Collect ALL WABA IDs
+        waba_ids = []
         for scope_obj in granular_scopes:
             if scope_obj.get("scope") == "whatsapp_business_management":
-                target_ids = scope_obj.get("target_ids", [])
-                if target_ids:
-                    waba_id = target_ids[0] # Pick the first one
-                    break
+                waba_ids.extend(scope_obj.get("target_ids", []))
 
-        # Fallback: If granular scopes are empty (Legacy mode), try the old endpoints?
-        # But for now, let's assume Business Login worked.
+        print("DEBUG: All WABA IDs from token:", waba_ids)
 
-        if not waba_id:
-            # SAFETY FALLBACK: Try fetching from 'me/accounts' logic if granular failed
-            # But usually, if granular is empty, the user didn't select a business.
-            return "No WhatsApp Business Account selected during login. Please try again and select a business.", 400
+        if not waba_ids:
+            return (
+                "No WhatsApp Business Account selected during login. "
+                "Please retry and select a business.",
+                400,
+            )
 
-        print(f"DEBUG: Found WABA ID via Token: {waba_id}")
+        # 3️⃣ Find the WABA that actually has a phone number
+        selected_waba = None
+        phone_number_id = None
+        display_phone = None
 
-        # 3. Get Phone Number ID from this WABA
-        phone_resp = requests.get(
-            f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers",
-            headers=headers
-        ).json()
+        for waba in waba_ids:
+            phone_resp = requests.get(
+                f"https://graph.facebook.com/v20.0/{waba}/phone_numbers",
+                headers=headers
+            ).json()
 
-        if not phone_resp.get("data"):
-            return f"WABA Found ({waba_id}), but no Phone Numbers are registered inside it.", 400
+            print(f"DEBUG phone_numbers for WABA {waba}:", phone_resp)
 
-        phone_data = phone_resp["data"][0]
-        phone_number_id = phone_data["id"]
-        display_phone = phone_data["display_phone_number"]
+            if phone_resp.get("data"):
+                selected_waba = waba
+                phone_data = phone_resp["data"][0]
+                phone_number_id = phone_data["id"]
+                display_phone = phone_data["display_phone_number"]
+                break
 
-        # 4. Subscribe App to Webhooks
-        sub_url = f"https://graph.facebook.com/v20.0/{waba_id}/subscribed_apps"
+        if not selected_waba:
+            return (
+                "WhatsApp Business Account found, but no phone numbers are attached. "
+                "Please add a number in WhatsApp Manager.",
+                400,
+            )
+
+        print("✅ SELECTED WABA:", selected_waba)
+        print("✅ PHONE NUMBER ID:", phone_number_id)
+        print("✅ DISPLAY PHONE:", display_phone)
+
+        # 4️⃣ Subscribe app to webhooks
+        sub_url = f"https://graph.facebook.com/v20.0/{selected_waba}/subscribed_apps"
         requests.post(sub_url, headers=headers)
 
-        # 5. Save to Database
-#        save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
+        # 5️⃣ SAVE SYSTEM USER TOKEN (NOT user token)
         system_token = os.getenv("WA_SYSTEM_TOKEN")
+        if not system_token:
+            return "System token not configured (WA_SYSTEM_TOKEN missing)", 500
 
         save_whatsapp_account(
-            waba_id,
+            selected_waba,
             phone_number_id,
             display_phone,
             system_token
         )
 
+        print("✅ WhatsApp business setup completed successfully")
         return redirect("/inbox")
 
     except Exception as e:
+        import traceback
         traceback.print_exc()
         return f"Setup Logic Failed: {str(e)}", 500
 
