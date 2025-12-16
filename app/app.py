@@ -282,9 +282,27 @@ def webhook():
 def webhook():
     # 1. VERIFICATION
     if request.method == "GET":
+        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
+
         if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
         return "Verification failed", 403
+
+    # 2. RAW LOGGING (The most important part)
+    try:
+        raw_data = request.get_data(as_text=True)
+        print(f"\n🔥🔥🔥 WEBHOOK RECEIVED RAW DATA:\n{raw_data}\n🔥🔥🔥", file=sys.stdout)
+        sys.stdout.flush()
+
+        # Parse JSON manually to be safe
+        data = json.loads(raw_data)
+
+        entry = data.get("entry", [])
+        if not entry: return "OK", 200
+        changes = entry[0].get("changes", [])
+        if not changes: return "OK", 200
+        value = changes[0].get("value", {})
+
 
     # 2. INCOMING EVENTS
     try:
