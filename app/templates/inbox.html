@@ -149,6 +149,59 @@
         #recording-ui { display: none; color: #f00; align-items: center; gap: 10px; flex: 1; }
         .rec-dot { width: 10px; height: 10px; background: red; border-radius: 50%; animation: blink 1s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
+
+        /* 🟢 IMAGE VIEWER (LIGHTBOX) STYLES */
+#image-viewer {
+    display: none;
+    position: fixed;
+    z-index: 3000; /* Highest priority */
+    padding-top: 50px;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.9);
+    cursor: zoom-out;
+}
+
+#full-image {
+    margin: auto;
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 90%;
+    max-height: 90vh;
+    object-fit: contain;
+    animation-name: zoom;
+    animation-duration: 0.3s;
+    border-radius: 5px;
+    box-shadow: 0 0 20px rgba(255,255,255,0.1);
+}
+
+#viewer-close {
+    position: absolute;
+    top: 15px;
+    right: 35px;
+    color: #f1f1f1;
+    font-size: 40px;
+    font-weight: bold;
+    transition: 0.3s;
+    cursor: pointer;
+}
+
+#viewer-close:hover,
+#viewer-close:focus {
+    color: #bbb;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+@keyframes zoom {
+    from {transform:scale(0)}
+    to {transform:scale(1)}
+}
+
     </style>
 </head>
 <body>
@@ -228,7 +281,11 @@
         </footer>
     </main>
 </div>
-
+<!-- 🟢 IMAGE VIEWER CONTAINER -->
+<div id="image-viewer" onclick="closeImageViewer()">
+    <span id="viewer-close">&times;</span>
+    <img class="modal-content" id="full-image">
+</div>
 <!-- MODALS -->
 <div class="modal-overlay" id="new-chat-modal">
     <div class="modal">
@@ -449,8 +506,7 @@
                         }
                         // 4. Image (Default)
                         else {
-                            content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" alt="Image">`;
-                        }
+                            content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" alt="Image" onclick="openImageViewer(this.src)" onerror="this.style.display='none';">`;                        }
 
                         // Add Caption if it exists (and isn't audio)
                         if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
@@ -659,6 +715,20 @@
     // --- VOICE ---
     async function startRecording() { if (!navigator.mediaDevices) return alert("Mic error"); const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); mediaRecorder = new MediaRecorder(stream); audioChunks = []; mediaRecorder.ondataavailable = e => audioChunks.push(e.data); mediaRecorder.start(); document.getElementById('mic-btn').style.display = 'none'; document.getElementById('msg-input').style.display = 'none'; document.getElementById('recording-ui').style.display = 'flex'; recStartTime = Date.now(); recTimerInt = setInterval(() => { const diff = Math.floor((Date.now() - recStartTime)/1000); const m = Math.floor(diff/60); const s = diff % 60; document.getElementById('rec-timer').innerText = `${m}:${s < 10 ? '0'+s : s}`; }, 1000); }
     async function stopRecording(send) { if (!mediaRecorder) return; mediaRecorder.onstop = async () => { clearInterval(recTimerInt); document.getElementById('recording-ui').style.display = 'none'; document.getElementById('mic-btn').style.display = 'block'; document.getElementById('msg-input').style.display = 'block'; if (send) { const audioBlob = new Blob(audioChunks, { type: 'audio/ogg; codecs=opus' }); const formData = new FormData(); formData.append('phone', currentPhone); formData.append('file', audioBlob, 'voice.ogg'); formData.append('type', 'audio'); isSending = true; document.getElementById('messages').insertAdjacentHTML('beforeend', `<div class="msg sent">🎤 Sending voice...</div>`); await fetch('/send_attachment', {method: 'POST', body: formData}); setTimeout(() => { isSending = false; refreshChat(true); }, 1500); } }; mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(track => track.stop()); }
+    // --- IMAGE VIEWER LOGIC ---
+        function openImageViewer(src) {
+            const viewer = document.getElementById('image-viewer');
+            const fullImg = document.getElementById('full-image');
+            fullImg.src = src;
+            viewer.style.display = "flex"; // Flex centers it perfectly
+            viewer.style.justifyContent = "center";
+            viewer.style.alignItems = "center";
+        }
+
+        function closeImageViewer() {
+            document.getElementById('image-viewer').style.display = "none";
+        }
+
 </script>
 </body>
 </html>
