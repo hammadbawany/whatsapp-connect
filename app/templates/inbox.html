@@ -293,8 +293,9 @@
 
     // INIT
     loadChats(); loadMyProfile(); loadQuickReplies();
-    setInterval(() => loadChats(), 4000); // Poll chat list
+//1.    setInterval(() => loadChats(), 4000); // Poll chat list
 
+    setInterval(() => loadChats(), 400000); // Poll chat list
     // INPUT LISTENERS
     const msgInput = document.getElementById('msg-input');
     msgInput.addEventListener('input', function(e) {
