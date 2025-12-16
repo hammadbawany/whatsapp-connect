@@ -34,7 +34,7 @@ def get_active_account_id():
     Returns the ID of the latest connected WhatsApp account.
     """
     conn = get_conn()
-    print("get_active_account_id")
+    #print("get_active_account_id")
     # 🟢 FIX: Explicitly use RealDictCursor so we get a Dictionary
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -861,13 +861,54 @@ def send_design():
 
 
 @app.route("/media/<media_id>")
+@login_required
 def get_media(media_id):
     try:
-        content = download_whatsapp_media(media_id)
-        return Response(content, mimetype="image/jpeg")
+        # 1. Get the Access Token from the latest account
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            print("❌ Get Media: No access token found in DB")
+            return "No Account", 404
+
+        token = row['access_token']
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 2. Ask Meta for the Media URL
+        meta_url = f"https://graph.facebook.com/v20.0/{media_id}"
+        url_resp = requests.get(meta_url, headers=headers).json()
+
+        # 3. Check for Meta Errors
+        if "error" in url_resp:
+            print(f"❌ Meta Media Error for ID {media_id}:", url_resp)
+            return "", 404
+
+        if "url" not in url_resp:
+            print(f"❌ Unexpected Meta Response (No URL): {url_resp}")
+            return "", 404
+
+        # 4. Download the actual binary content
+        # Note: We must pass the Authorization header again here
+        media_url = url_resp["url"]
+        media_data = requests.get(media_url, headers=headers)
+
+        if media_data.status_code != 200:
+            print(f"❌ Failed to download binary data: {media_data.status_code}")
+            return "", 404
+
+        # 5. Return image to browser
+        content_type = media_data.headers.get("Content-Type", "image/jpeg")
+        return Response(media_data.content, mimetype=content_type)
+
     except Exception as e:
-        print("Media fetch error:", e)
-        return "", 404
+        print("❌ Get Media Fatal Error:", e)
+        traceback.print_exc()
+        return "", 500
 
 
 def download_whatsapp_media(media_id):
