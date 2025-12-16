@@ -981,61 +981,94 @@ def send_attachment():
         phone = request.form.get("phone")
         caption = request.form.get("caption", "")
         file = request.files.get("file")
-        msg_type = request.form.get("type", "image") # image, video, audio, document
+        # Default to image if not specified
+        msg_type = request.form.get("type", "image")
 
-        if not phone or not file: return jsonify({"error": "missing data"}), 400
+        if not phone or not file:
+            return jsonify({"error": "missing data"}), 400
 
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 🟢 FIX: Use Hardcoded WABA ID
+        cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+        acc = cur.fetchone()
+        cur.close(); conn.close()
+
+        if not acc:
+            print(f"❌ Send Attachment Failed: WABA {TARGET_WABA_ID} not found")
+            return jsonify({"error": "Account not connected"}), 400
+
+        # -------------------------------------------------
         # 1. Upload to Meta
-        upload_url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/media"
-        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        # -------------------------------------------------
+        upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
+        headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
-        # WhatsApp requires the 'file' param, and 'messaging_product'
-        files_payload = {"file": (file.filename, file.stream, file.mimetype)}
+        # Prepare file payload
+        files = {"file": (file.filename, file.stream, file.mimetype)}
         data_payload = {"messaging_product": "whatsapp"}
 
-        print(f"Uploading {msg_type}...")
-        up_resp = requests.post(upload_url, headers=headers, files=files_payload, data=data_payload).json()
+        print(f"📤 Uploading {msg_type} to Meta...")
+        up_resp = requests.post(upload_url, headers=headers, files=files, data=data_payload).json()
 
-        if "id" not in up_resp:
-            print("Meta Upload Error:", up_resp)
+        media_id = up_resp.get("id")
+        if not media_id:
+            print("❌ Meta Upload Error:", up_resp)
             return jsonify(up_resp), 500
 
-        media_id = up_resp["id"]
+        print(f"✅ Uploaded! Media ID: {media_id}")
 
-        # 2. Send Message via Meta
-        msg_url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        # -------------------------------------------------
+        # 2. Send Message
+        # -------------------------------------------------
+        msg_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        json_headers = {
+            "Authorization": f"Bearer {acc['access_token']}",
+            "Content-Type": "application/json"
+        }
 
-        # Construct payload based on type
-        message_body = {
+        msg_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
             "type": msg_type,
             msg_type: {"id": media_id}
         }
 
-        # Captions are only valid for image, video, document
+        # Add caption if allowed
         if msg_type in ['image', 'video', 'document'] and caption:
-            message_body[msg_type]["caption"] = caption
+            msg_payload[msg_type]["caption"] = caption
 
-        send_resp = requests.post(msg_url, json=message_body, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}).json()
+        print(f"📤 Sending Message to {phone}...")
+        send_resp = requests.post(msg_url, json=msg_payload, headers=json_headers)
+        send_json = send_resp.json()
 
+        # 🟢 CRITICAL CHECK: Did Meta accept it?
+        if send_resp.status_code != 200:
+            print("❌ Meta Send Error:", send_json)
+            return jsonify(send_json), send_resp.status_code
+
+        wa_id = send_json.get("messages", [{}])[0].get("id")
+
+        # -------------------------------------------------
         # 3. Save to DB
-        wa_id = send_resp.get("messages", [{}])[0].get("id")
-
+        # -------------------------------------------------
         conn = get_conn(); cur = conn.cursor()
-        print("send_attachment")
-
         cur.execute("""
-            INSERT INTO messages (user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
-            VALUES (%s, 'agent', %s, %s, %s, %s, 'sent', NOW())
-        """, (phone, msg_type, media_id, caption, wa_id))
+            INSERT INTO messages (
+                whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp
+            ) VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
+        """, (acc['id'], phone, msg_type, media_id, caption, wa_id))
+
         conn.commit(); cur.close(); conn.close()
 
+        print("✅ Message Sent & Saved!")
         return jsonify({"success": True})
 
-    except Exception:
+    except Exception as e:
+        print("❌ Server Exception:", e)
         traceback.print_exc()
-        return jsonify({"error": "Failed"}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 
