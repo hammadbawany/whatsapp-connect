@@ -538,6 +538,7 @@ def webhook():
                     interactive = msg.get("interactive", {})
                     i_type = interactive.get("type")
 
+
                     print(f"🔹 Processing Interactive: {i_type}", file=sys.stdout)
 
                     resp = ""
@@ -553,7 +554,14 @@ def webhook():
                             INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
                             VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
                         """, (whatsapp_account_id, phone, resp, wa_id))
-
+                elif msg_type == "button":
+                    button_payload = msg.get("button", {})
+                    text_response = button_payload.get("text")
+                    if text_response:
+                        cur.execute("""
+                            INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
+                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
+                        """, (whatsapp_account_id, phone, text_response, wa_id))
                 # --- UNKNOWN ---
                 else:
                     print(f"⚠️ Ignored msg type: {msg_type}", file=sys.stdout)
@@ -1878,3 +1886,38 @@ def normalize_phone(phone):
         return "92" + p[1:]
 
     return p
+
+@app.route("/mark_unread", methods=["POST"])
+@login_required
+def mark_unread():
+    phone = request.json.get("phone")
+    account_id = get_active_account_id()
+
+    if not phone or not account_id:
+        return jsonify({"error": "Missing data"}), 400
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # Find the ID of the VERY LAST message in this conversation
+        # and set its status back to 'received'.
+        # This will make the unread counter reappear.
+        cur.execute("""
+            UPDATE messages
+            SET status = 'received'
+            WHERE id = (
+                SELECT id FROM messages
+                WHERE user_phone = %s AND whatsapp_account_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            )
+        """, (phone, account_id))
+
+        conn.commit()
+        cur.close(); conn.close()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        print("Mark Unread Error:", e)
+        return jsonify({"error": "Failed"}), 500

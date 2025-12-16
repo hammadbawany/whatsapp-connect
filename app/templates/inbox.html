@@ -7,6 +7,29 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+
+
+    .context-menu {
+    display: none;
+    position: absolute;
+    z-index: 1000;
+    background-color: var(--header-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    padding: 5px 0;
+    width: 180px;
+}
+.context-menu-item {
+    padding: 8px 15px;
+    color: var(--primary-text);
+    cursor: pointer;
+    font-size: 14px;
+}
+.context-menu-item:hover {
+    background-color: #2a3942;
+}
+
     /* 🟢 UPDATED: SMALLER IMAGES */
 
     .template-body {
@@ -205,6 +228,10 @@
     </style>
 </head>
 <body>
+  <!-- 🟢 CONTEXT MENU (Hidden by default) -->
+  <div id="context-menu" class="context-menu">
+      <div class="context-menu-item" onclick="markChatUnread()">Mark as unread</div>
+  </div>
 
 <div id="app">
     <!-- SIDEBAR -->
@@ -337,6 +364,7 @@
 <input type="file" id="hidden-file-input" style="display:none;">
 
 <script>
+
     // VARS
     let currentPhone = null;
     let refreshTimer = null;
@@ -347,6 +375,39 @@
     let mediaRecorder, audioChunks, recStartTime, recTimerInt;
     let pendingFile = null, pendingFileType = null;
     let lastUserMsgTime = null;
+
+
+    // --- CONTEXT MENU LOGIC ---
+        let contextMenuPhone = null;
+
+        function showContextMenu(event, phone) {
+            event.preventDefault(); // Stop the default browser right-click menu
+
+            const menu = document.getElementById('context-menu');
+            menu.style.display = 'block';
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+
+            contextMenuPhone = phone; // Store which phone was clicked
+        }
+
+        // Hide menu if user clicks away
+        window.addEventListener('click', () => {
+            document.getElementById('context-menu').style.display = 'none';
+        });
+
+        async function markChatUnread() {
+            if (!contextMenuPhone) return;
+
+            await fetch('/mark_unread', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ phone: contextMenuPhone })
+            });
+
+            // Refresh the chat list to show the green badge
+            loadChats();
+        }
 
     // INIT
     loadChats(); loadMyProfile(); loadQuickReplies();
@@ -424,7 +485,12 @@
                     div = document.createElement('div');
                     div.id = `chat-item-${c.phone}`;
                     div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+                    //div.onclick = () => openChat(c.phone, c.name);
+                    // LEFT CLICK: Open Chat
                     div.onclick = () => openChat(c.phone, c.name);
+
+                    // RIGHT CLICK: Show Menu
+                    div.oncontextmenu = (e) => showContextMenu(e, c.phone);
                     div.innerHTML = htmlContent;
 
                     // 🟢 ADD THIS LINE: Store phone for search
