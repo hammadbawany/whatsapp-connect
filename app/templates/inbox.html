@@ -388,46 +388,61 @@
     }
 
     function renderChatList() {
-        const list = document.getElementById('chat-list');
-        const filtered = allChats.filter(c => {
-            if (currentFilter === 'unread') return c.unread_count > 0;
-            return true;
-        });
+            const list = document.getElementById('chat-list');
+            const filtered = allChats.filter(c => {
+                if (currentFilter === 'unread') return c.unread_count > 0;
+                return true;
+            });
 
-        filtered.forEach((c, index) => {
-            let div = document.getElementById(`chat-item-${c.phone}`);
-            const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-            let unreadCount = c.unread_count;
-            if (currentPhone === c.phone) unreadCount = 0;
-            const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
-            const bgColor = getAvatarColor(c.phone);
-            const initials = c.name ? getInitials(c.name) : "?";
-            const displayName = c.name || c.phone;
-            const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
+            filtered.forEach((c, index) => {
+                let div = document.getElementById(`chat-item-${c.phone}`);
 
-            const htmlContent = `
-                <div class="chat-avatar" style="background-color: ${bgColor};">${initials}</div>
-                <div class="chat-info">
-                    <div class="chat-top"><span class="chat-name">${displayName}</span><span class="chat-time">${timeStr}</span></div>
-                    <div class="chat-top"><span class="chat-msg">${previewMsg}</span>${unreadHtml}</div>
-                </div>`;
+                // ... (keep existing variable definitions for timeStr, unreadHtml etc.) ...
+                const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+                let unreadCount = c.unread_count;
+                if (currentPhone === c.phone) unreadCount = 0;
+                const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
+                const bgColor = getAvatarColor(c.phone);
+                const initials = c.name ? getInitials(c.name) : "?";
+                const displayName = c.name || c.phone;
+                const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
 
-            if (!div) {
-                div = document.createElement('div');
-                div.id = `chat-item-${c.phone}`;
-                div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
-                div.onclick = () => openChat(c.phone, c.name);
-                div.innerHTML = htmlContent;
-                list.appendChild(div);
-            } else {
-                div.innerHTML = htmlContent;
-                if(currentPhone === c.phone) div.classList.add('active');
-                else div.classList.remove('active');
-            }
-            if (list.children[index] !== div && list.children[index]) list.insertBefore(div, list.children[index]);
-            else if (!list.contains(div)) list.appendChild(div);
-        });
-    }
+                const htmlContent = `
+                    <div class="chat-avatar" style="background-color: ${bgColor};">${initials}</div>
+                    <div class="chat-info">
+                        <div class="chat-top">
+                            <span class="chat-name">${displayName}</span>
+                            <span class="chat-time">${timeStr}</span>
+                        </div>
+                        <div class="chat-top">
+                            <span class="chat-msg">${previewMsg}</span>
+                            ${unreadHtml}
+                        </div>
+                    </div>`;
+
+                if (!div) {
+                    div = document.createElement('div');
+                    div.id = `chat-item-${c.phone}`;
+                    div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+                    div.onclick = () => openChat(c.phone, c.name);
+                    div.innerHTML = htmlContent;
+
+                    // 🟢 ADD THIS LINE: Store phone for search
+                    div.dataset.phone = c.phone;
+
+                    list.appendChild(div);
+                } else {
+                    div.innerHTML = htmlContent;
+                    // 🟢 ADD THIS LINE HERE TOO (for updates)
+                    div.dataset.phone = c.phone;
+
+                    if(currentPhone === c.phone) div.classList.add('active');
+                    else div.classList.remove('active');
+                }
+                if (list.children[index] !== div) list.insertBefore(div, list.children[index]);
+            });
+        }
+
 
     // --- CHAT WINDOW LOGIC ---
     async function openChat(phone, name) {
@@ -697,7 +712,23 @@
     async function loadMyProfile() { try { const resp = await fetch('/me'); if(resp.ok) { const data = await resp.json(); const avatar = document.getElementById('my-avatar'); avatar.style.backgroundColor = getAvatarColor(data.username); avatar.innerText = getInitials(data.username); } } catch(e) {} }
     function checkInput() { const val = msgInput.value.trim(); const isExpired = msgInput.disabled; if (isExpired) return; document.getElementById('send-btn').style.display = val ? 'block' : 'none'; document.getElementById('mic-btn').style.display = val ? 'none' : 'block'; }
     function setFilter(type, el) { currentFilter = type; document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active')); el.classList.add('active'); renderChatList(); }
-    function filterChats(query) { const q = query.toLowerCase(); document.querySelectorAll('.chat-item').forEach(item => { const name = item.querySelector('.chat-name').innerText.toLowerCase(); item.style.display = name.includes(q) ? 'flex' : 'none'; }); }
+    function filterChats(query) {
+            const q = query.toLowerCase().trim();
+
+            document.querySelectorAll('.chat-item').forEach(item => {
+                // Get Name text
+                const name = item.querySelector('.chat-name').innerText.toLowerCase();
+                // Get Phone from the data attribute we added above
+                const phone = (item.dataset.phone || "").toLowerCase();
+
+                // Show if Name OR Phone matches
+                if (name.includes(q) || phone.includes(q)) {
+                    item.style.display = 'flex';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
     function showNewChatModal() { document.getElementById('new-chat-modal').style.display = 'grid'; }
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
     async function startNewChat() { const phone = document.getElementById('new-phone').value.replace(/\D/g,''); if (phone.length < 7) return alert("Invalid"); await fetch('/create_contact', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})}); closeModal('new-chat-modal'); loadChats(); setTimeout(() => openChat(phone, null), 500); }
