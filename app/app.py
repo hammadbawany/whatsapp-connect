@@ -864,50 +864,51 @@ def send_design():
 @login_required
 def get_media(media_id):
     try:
-        # 1. Get the Access Token from the latest account
+        # 1. Get the Access Token (Latest one)
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
         row = cur.fetchone()
-        cur.close()
-        conn.close()
+        cur.close(); conn.close()
 
         if not row:
-            print("❌ Get Media: No access token found in DB")
-            return "No Account", 404
+            print(f"❌ [MEDIA] No access token found in DB to fetch {media_id}", file=sys.stdout)
+            return "", 404
 
         token = row['access_token']
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 2. Ask Meta for the Media URL
+        # 2. Ask Meta for the Fresh URL
         meta_url = f"https://graph.facebook.com/v20.0/{media_id}"
         url_resp = requests.get(meta_url, headers=headers).json()
 
-        # 3. Check for Meta Errors
+        # 🔍 DEBUG: Print what Meta says
         if "error" in url_resp:
-            print(f"❌ Meta Media Error for ID {media_id}:", url_resp)
+            print(f"❌ [MEDIA] Meta Error for ID {media_id}: {url_resp['error']['message']}", file=sys.stdout)
+            sys.stdout.flush()
             return "", 404
 
         if "url" not in url_resp:
-            print(f"❌ Unexpected Meta Response (No URL): {url_resp}")
+            print(f"❌ [MEDIA] No URL returned for ID {media_id}", file=sys.stdout)
+            sys.stdout.flush()
             return "", 404
 
-        # 4. Download the actual binary content
-        # Note: We must pass the Authorization header again here
+        # 3. Download the Binary Image
         media_url = url_resp["url"]
         media_data = requests.get(media_url, headers=headers)
 
         if media_data.status_code != 200:
-            print(f"❌ Failed to download binary data: {media_data.status_code}")
+            print(f"❌ [MEDIA] Failed to download content: {media_data.status_code}", file=sys.stdout)
             return "", 404
 
-        # 5. Return image to browser
+        # 4. Serve it to Frontend
         content_type = media_data.headers.get("Content-Type", "image/jpeg")
         return Response(media_data.content, mimetype=content_type)
 
     except Exception as e:
-        print("❌ Get Media Fatal Error:", e)
+        print(f"❌ [MEDIA] Critical Server Error: {e}", file=sys.stdout)
         traceback.print_exc()
+        sys.stdout.flush()
         return "", 500
 
 
