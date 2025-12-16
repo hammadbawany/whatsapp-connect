@@ -443,7 +443,9 @@ def presence_heartbeat():
 @login_required
 def typing():
     data = request.get_json()
-    phone = data.get("phone")
+#    phone = data.get("phone")
+    phone = normalize_phone(data.get("phone"))
+
     typing = data.get("typing", False)
     # For simplicity we store typing state in-memory dict (per-process)
     # If you run multiple dynos use Redis to share typing state.
@@ -501,7 +503,9 @@ def list_users():
 @app.route("/history")
 @login_required
 def history():
-    phone = request.args.get("phone")
+#    phone = request.args.get("phone")
+    phone = normalize_phone(request.args.get("phone"))
+
     account_id = get_active_account_id()
 
     if not phone or not account_id: return jsonify([])
@@ -571,7 +575,9 @@ def send_text():
 @app.route("/send_text", methods=["POST"])
 def send_text():
     data = request.json
-    phone = data.get("phone"); text = data.get("text")
+    phone = normalize_phone(data.get("phone"))
+
+    text = data.get("text")
 
     conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -601,7 +607,9 @@ def send_text():
 @login_required
 def send_media():
     data = request.json
-    phone = data["phone"]
+#    phone = data["phone"]
+    phone = normalize_phone(data["phone"])
+
     image_url = data["url"]
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
@@ -738,7 +746,9 @@ def send_whatsapp_image(phone, media_id, caption=None):
 @app.route("/send_design", methods=["POST"])
 def send_design():
     try:
-        phone = request.form.get("phone")
+#        phone = request.form.get("phone")
+        phone = normalize_phone(request.form.get("phone"))
+
         caption = request.form.get("caption", "")
         whatsapp_account_id = request.form.get("whatsapp_account_id")
         file = request.files.get("file")
@@ -978,7 +988,9 @@ def download_whatsapp_media(media_id):
 @app.route("/send_attachment", methods=["POST"])
 def send_attachment():
     try:
-        phone = request.form.get("phone")
+#        phone = request.form.get("phone")
+        phone = normalize_phone(request.form.get("phone"))
+
         caption = request.form.get("caption", "")
         file = request.files.get("file")
         # Default to image if not specified
@@ -1076,7 +1088,9 @@ def send_attachment():
 @app.route("/set_tag", methods=["POST"])
 def set_tag():
     data = request.json
-    phone = data.get("phone")
+    #phone = data.get("phone")
+    phone = normalize_phone(data.get("phone"))
+
     tag = data.get("tag") # 'unread', 'lead', etc.
 
     conn = get_conn(); cur = conn.cursor()
@@ -1093,7 +1107,8 @@ def set_tag():
 @login_required
 def create_contact():
     data = request.json
-    phone = data.get("phone")
+    #phone = data.get("phone")
+    phone = normalize_phone(data.get("phone"))
 
     if not phone: return jsonify({"error": "No phone"}), 400
 
@@ -1113,7 +1128,8 @@ def create_contact():
 def mark_read():
     try:
         data = request.json
-        phone = data.get("phone")
+        #phone = data.get("phone")
+        phone = normalize_phone(data.get("phone"))
 
         conn = get_conn()
         cur = conn.cursor()
@@ -1186,7 +1202,9 @@ def get_templates():
 def send_template():
     try:
         data = request.json
-        phone = data.get("phone")
+#        phone = data.get("phone")
+        phone = normalize_phone(data.get("phone"))
+
         template_name = data.get("template_name")
         language = data.get("language", "en_US")
         # Use the full text passed from frontend
@@ -1666,3 +1684,19 @@ def connect_page():
 
     cur.close(); conn.close()
     return render_template("connect.html")
+
+
+# --- HELPER: NORMALIZE PHONE ---
+def normalize_phone(phone):
+    """
+    Converts 03001234567 -> 923001234567
+    Removes + and spaces.
+    """
+    if not phone: return ""
+    p = str(phone).strip().replace("+", "").replace(" ", "").replace("-", "")
+
+    # Specific logic for Pakistan (03 -> 923)
+    if p.startswith("03") and len(p) == 11:
+        return "92" + p[1:]
+
+    return p
