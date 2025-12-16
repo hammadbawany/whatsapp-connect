@@ -297,6 +297,8 @@ def webhook():
 
         # --- DIAGNOSTIC LOGGING ---
         metadata = value.get("metadata", {})
+        print("FULL METADATA:", metadata, file=sys.stdout)
+
         incoming_phone_id = metadata.get("phone_number_id")
         print(f"🔹 [WEBHOOK] Hit! Phone ID: {incoming_phone_id}", file=sys.stdout)
         sys.stdout.flush()
