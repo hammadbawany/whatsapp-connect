@@ -1921,3 +1921,26 @@ def mark_unread():
     except Exception as e:
         print("Mark Unread Error:", e)
         return jsonify({"error": "Failed"}), 500
+
+@app.route("/unread_counts")
+@login_required
+def unread_counts():
+    account_id = get_active_account_id()
+    if not account_id: return jsonify({})
+
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT user_phone, COUNT(*) as unread
+        FROM messages
+        WHERE whatsapp_account_id = %s AND status = 'received'
+        GROUP BY user_phone
+    """, (account_id,))
+
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    # Format into a simple {phone: count} dictionary
+    counts = {r['user_phone']: r['unread'] for r in rows}
+
+    return jsonify(counts)
