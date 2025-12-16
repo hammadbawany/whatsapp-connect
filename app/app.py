@@ -1184,54 +1184,68 @@ def get_templates():
 # ==========================================
 @app.route("/send_template", methods=["POST"])
 def send_template():
-    data = request.json
-    phone = data.get("phone")
-    template_name = data.get("template_name")
-    language = data.get("language", "en_US")
-    # 🟢 Get the actual text passed from frontend, default to placeholder if missing
-    template_body = data.get("template_body", f"[Template: {template_name}]")
+    try:
+        data = request.json
+        phone = data.get("phone")
+        template_name = data.get("template_name")
+        language = data.get("language", "en_US")
+        # Use the full text passed from frontend
+        template_body = data.get("template_body", f"[Template: {template_name}]")
 
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {
-                "code": language
+        # 🟢 1. FORCE TARGET WABA ID
+        cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+        acc = cur.fetchone()
+
+        if not acc:
+            cur.close(); conn.close()
+            print(f"❌ Send Template Error: Target WABA {TARGET_WABA_ID} not connected.")
+            return jsonify({"error": "No account connected"}), 400
+
+        # 2. Send to Meta
+        url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        headers = {
+            "Authorization": f"Bearer {acc['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": language}
             }
         }
-    }
 
-    try:
         resp = requests.post(url, headers=headers, json=payload)
         json_resp = resp.json()
 
-        if "messages" in json_resp:
-            wa_id = json_resp["messages"][0]["id"]
-            conn = get_conn(); cur = conn.cursor()
-            print("send_template")
-
-            # 🟢 Save the ACTUAL template text to the database
-            cur.execute("""
-                INSERT INTO messages (user_phone, sender, message, whatsapp_id, status, timestamp)
-                VALUES (%s, 'agent', %s, %s, 'sent', NOW())
-            """, (phone, template_body, wa_id))
-
-            conn.commit(); cur.close(); conn.close()
-            return jsonify({"success": True})
-        else:
-            print("Meta Error:", json_resp)
+        if "messages" not in json_resp:
+            print("❌ Meta Template Error:", json_resp)
             return jsonify(json_resp), 400
 
+        wa_id = json_resp["messages"][0]["id"]
+
+        # 🟢 3. SAVE WITH CORRECT ACCOUNT ID
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
+            )
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+        """, (acc['id'], phone, template_body, wa_id))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"success": True})
+
     except Exception as e:
-        print("Send Template Error:", e)
+        print("❌ Send Template Exception:", e)
         return jsonify({"error": str(e)}), 500
 
 
