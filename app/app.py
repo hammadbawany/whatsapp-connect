@@ -262,7 +262,7 @@ def login():
             conn = get_conn(); cur = conn.cursor()
             cur.execute("UPDATE users SET last_seen=%s WHERE id=%s", (datetime.utcnow(), row["id"]))
             conn.commit(); cur.close(); conn.close()
-            return redirect(url_for("inbox"))
+            return redirect(url_for("index"))
         return render_template("login.html", error="Invalid credentials")
     return render_template("login.html")
 
@@ -321,24 +321,23 @@ def list_users():
                 MAX(timestamp) as last_ts,
                 COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
             FROM messages
-            WHERE whatsapp_account_id = %s
             GROUP BY user_phone
         )
         SELECT
             c.phone,
+            c.name,
             lm.last_ts,
             COALESCE(lm.unread_count, 0) as unread_count,
             m.message as last_message,
-            m.media_type,
-            ct.tag
+            m.media_type
         FROM contacts c
-        JOIN LastMsg lm ON c.phone = lm.user_phone
+        LEFT JOIN LastMsg lm ON c.phone = lm.user_phone
         LEFT JOIN messages m
-            ON m.user_phone = lm.user_phone
-           AND m.timestamp = lm.last_ts
-           AND m.whatsapp_account_id = %s
-        LEFT JOIN contact_tags ct ON c.phone = ct.phone
-        ORDER BY lm.last_ts DESC
+          ON m.user_phone = lm.user_phone
+         AND m.timestamp = lm.last_ts
+        ORDER BY
+            lm.last_ts DESC NULLS LAST,
+            c.phone ASC;
     """
 
     cur.execute(query, (account_id, account_id))
@@ -363,16 +362,10 @@ def history():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute("""
-        SELECT id
-        FROM whatsapp_accounts
-        ORDER BY id DESC
-        LIMIT 1
-    """)
+    # Get active account ID
+    cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
     account = cur.fetchone()
-    if not account:
-        return jsonify([])
-
+    if not account: return jsonify([])
     account_id = account["id"]
 
     cur.execute("""
@@ -392,17 +385,26 @@ def history():
     rows = cur.fetchall()
     cur.close(); conn.close()
 
-    return jsonify([
-        {
+    results = []
+    for r in rows:
+        ts_iso = None
+        if r["timestamp"]:
+            ts_iso = r["timestamp"].isoformat()
+            # 🟢 FIX: Force UTC 'Z' if missing.
+            # This ensures browser converts 9:00 UTC to 2:00 PM PKT correctly.
+            if not ts_iso.endswith("Z") and "+" not in ts_iso:
+                ts_iso += "Z"
+
+        results.append({
             "sender": r["sender"],
             "message": r["message"],
             "media_type": r["media_type"],
             "media_id": r["media_id"],
             "status": r["status"],
-            "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None
-        }
-        for r in rows
-    ])
+            "timestamp": ts_iso
+        })
+
+    return jsonify(results)
 
 @app.route("/send_text", methods=["POST"])
 def send_text():
@@ -1258,7 +1260,7 @@ def setup_whatsapp_business(access_token):
         )
 
         print("✅ WhatsApp business setup completed successfully")
-        return redirect("/inbox")
+        return redirect("/")
 
     except Exception as e:
         import traceback
@@ -1380,3 +1382,39 @@ def get_account_context(whatsapp_account_id):
     conn.close()
 
     return row
+
+
+@app.route("/")
+def index():
+    # 1. Not Logged In? -> Login
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
+    # 2. Logged In? Check for WhatsApp Connection
+    conn = get_conn()
+    cur = conn.cursor()
+    # Check if we have at least one account linked
+    cur.execute("SELECT id FROM whatsapp_accounts LIMIT 1")
+    account = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if account:
+        # 3. Connected -> Go to Inbox
+        return redirect(url_for("inbox"))
+    else:
+        # 4. Not Connected -> Go to Onboarding
+        return redirect(url_for("connect_page"))
+
+@app.route("/connect")
+@login_required
+def connect_page():
+    # If they somehow get here but are already connected, push to inbox
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id FROM whatsapp_accounts LIMIT 1")
+    if cur.fetchone():
+        cur.close(); conn.close()
+        return redirect(url_for("inbox"))
+
+    cur.close(); conn.close()
+    return render_template("connect.html")
