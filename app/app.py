@@ -1140,67 +1140,74 @@ def whatsapp_callback():
 
 def setup_whatsapp_business(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
+    fb_app_id = os.getenv("FB_APP_ID")
+    fb_app_secret = os.getenv("FB_APP_SECRET")
 
     try:
-        print("DEBUG: Fetching WhatsApp Accounts directly...")
+        print("DEBUG: Inspecting Token for WABA IDs...")
 
-        # 🟢 NEW API CALL: Get WABAs directly from User node
-        # This only works if your App Type is "Business" (which you confirmed it is)
-        user_resp = requests.get(
-            "https://graph.facebook.com/v20.0/me",
-            headers=headers,
-            params={"fields": "id,name,whatsapp_business_accounts"}
-        ).json()
+        # 1. Inspect the Token (Debug Token)
+        # We need to know which WABA the user selected in the popup
+        debug_url = (
+            f"https://graph.facebook.com/v20.0/debug_token"
+            f"?input_token={access_token}"
+            f"&access_token={fb_app_id}|{fb_app_secret}" # App Token
+        )
+        debug_resp = requests.get(debug_url).json()
 
-        print("DEBUG USER RESP:", user_resp)
+        print("DEBUG TOKEN RESP:", debug_resp)
 
-        if "error" in user_resp:
-            return f"Meta API Error: {user_resp['error']['message']}", 400
+        if "error" in debug_resp:
+            return f"Token Error: {debug_resp['error']['message']}", 400
 
-        # Check if WABAs exist
-        waba_data_list = user_resp.get("whatsapp_business_accounts", {}).get("data", [])
+        data = debug_resp.get("data", {})
+        granular_scopes = data.get("granular_scopes", [])
 
-        if not waba_data_list:
-            return "No WhatsApp Business Accounts (WABA) found linked to this Facebook User.", 400
+        # 2. Find the WABA ID in the scopes
+        waba_id = None
 
-        # Pick the first WABA found
-        waba_id = waba_data_list[0]["id"]
-        waba_name = waba_data_list[0].get("name", "Unknown")
-        print(f"DEBUG: Found WABA ID: {waba_id} ({waba_name})")
+        for scope_obj in granular_scopes:
+            if scope_obj.get("scope") == "whatsapp_business_management":
+                target_ids = scope_obj.get("target_ids", [])
+                if target_ids:
+                    waba_id = target_ids[0] # Pick the first one
+                    break
 
-        # ---------------------------------------------------------
-        # Get Phone Number ID from this WABA
-        # ---------------------------------------------------------
+        # Fallback: If granular scopes are empty (Legacy mode), try the old endpoints?
+        # But for now, let's assume Business Login worked.
+
+        if not waba_id:
+            # SAFETY FALLBACK: Try fetching from 'me/accounts' logic if granular failed
+            # But usually, if granular is empty, the user didn't select a business.
+            return "No WhatsApp Business Account selected during login. Please try again and select a business.", 400
+
+        print(f"DEBUG: Found WABA ID via Token: {waba_id}")
+
+        # 3. Get Phone Number ID from this WABA
         phone_resp = requests.get(
             f"https://graph.facebook.com/v20.0/{waba_id}/phone_numbers",
             headers=headers
         ).json()
 
         if not phone_resp.get("data"):
-            return f"WABA Found ({waba_name}), but no Phone Numbers are registered inside it.", 400
+            return f"WABA Found ({waba_id}), but no Phone Numbers are registered inside it.", 400
 
         phone_data = phone_resp["data"][0]
         phone_number_id = phone_data["id"]
         display_phone = phone_data["display_phone_number"]
 
-        # ---------------------------------------------------------
-        # Subscribe App to Webhooks (Critical)
-        # ---------------------------------------------------------
+        # 4. Subscribe App to Webhooks
         sub_url = f"https://graph.facebook.com/v20.0/{waba_id}/subscribed_apps"
         requests.post(sub_url, headers=headers)
 
-        # ---------------------------------------------------------
-        # Save to Database
-        # ---------------------------------------------------------
+        # 5. Save to Database
         save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
 
         return redirect("/inbox")
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return f"Setup Logic Failed: {str(e)}", 500
-
 
 @app.route("/whatsapp/fetch-assets")
 def fetch_assets():
