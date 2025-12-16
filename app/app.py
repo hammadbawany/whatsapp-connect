@@ -1,8 +1,8 @@
 # app.py (trimmed/combined - replace your current app.py with this or merge carefully)
 from dotenv import load_dotenv
 load_dotenv()
-
-
+import json
+import sys
 import os
 import requests
 import psycopg2
@@ -26,6 +26,32 @@ WHATSAPP_TOKEN = os.getenv("WA_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WA_PHONE")
 WABA_ID = os.getenv("WA_WABA_ID")
 
+
+
+
+def get_active_account_id():
+    """
+    Returns the ID of the latest connected WhatsApp account.
+    """
+    conn = get_conn()
+    print("get_active_account_id")
+    # 🟢 FIX: Explicitly use RealDictCursor so we get a Dictionary
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    # 🟢 FIX: Access by Name ['id'], because row[0] causes KeyError in DictCursor
+    return row['id'] if row else None
+
+
+
+
+
+
 # ---------- Auth helpers ----------
 def login_required(f):
     from functools import wraps
@@ -39,19 +65,22 @@ def login_required(f):
 def get_current_user():
     if "user_id" not in session:
         return None
-    conn = get_conn(); cur = conn.cursor()
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor) # Use Dict Cursor for consistency
     cur.execute("SELECT id, username, role, last_seen FROM users WHERE id=%s", (session["user_id"],))
     u = cur.fetchone()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
     return u
 
-# ---------- Webhook verification ----------
+'''
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     # -----------------------------------------------------
     # 1️⃣ VERIFICATION (META HANDSHAKE)
     # -----------------------------------------------------
     if request.method == "GET":
+        print("webhook get:")
         VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
@@ -62,60 +91,83 @@ def webhook():
         return "Verification failed", 403
 
     # -----------------------------------------------------
-    # 2️⃣ INCOMING EVENTS (MESSAGES & STATUS UPDATES)
+    # 2️⃣ INCOMING EVENTS (POST)
     # -----------------------------------------------------
     try:
+        print("webhook post:")
+
         data = request.get_json(silent=True) or {}
         entry = data.get("entry", [])
 
-        if not entry:
-            return "OK", 200
-
+        if not entry: return "OK", 200
         changes = entry[0].get("changes", [])
-        if not changes:
-            return "OK", 200
+        if not changes: return "OK", 200
+
         value = changes[0].get("value", {})
 
         # -------------------------------------------------
-        # 🆕 IDENTIFY WHICH WHATSAPP NUMBER THIS EVENT IS FOR
+        # 3️⃣ IDENTIFY SAAS ACCOUNT (WITH FALLBACK FIX)
         # -------------------------------------------------
         metadata = value.get("metadata", {})
-        phone_number_id = metadata.get("phone_number_id")
+        print("FULL METADATA:", metadata, file=sys.stdout)
 
-        whatsapp_account_id = None
-        if phone_number_id:
-            whatsapp_account_id = get_whatsapp_account_id(phone_number_id)
+        incoming_phone_id = metadata.get("phone_number_id")
 
-        if not whatsapp_account_id:
-            print(f"⚠️ Unknown phone_number_id: {phone_number_id}")
-        # Database Connection
+        # Diagnostic Log
+        print(f"🔹 Webhook Hit! Incoming Phone ID: {incoming_phone_id}", file=sys.stdout)
+
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # =================================================
-        # 🟢 NEW: CAPTURE CONTACT NAME
-        # =================================================
-        # WhatsApp sends the user's profile name here.
-        # We save it to the 'contacts' table so the UI shows the name.
-        contacts_data = value.get("contacts", [])
-        if contacts_data:
-            for contact in contacts_data:
-                wa_phone = contact.get("wa_id")
-                profile_name = contact.get("profile", {}).get("name")
+        whatsapp_account_id = None
 
-                if wa_phone and profile_name:
-                    try:
-                        cur.execute("""
-                            INSERT INTO contacts (phone, name)
-                            VALUES (%s, %s)
-                            ON CONFLICT (phone)
-                            DO UPDATE SET name = EXCLUDED.name
-                        """, (wa_phone, profile_name))
-                    except Exception as e:
-                        print(f"⚠️ Error saving contact name: {e}")
+        if incoming_phone_id:
+            # A. Try Exact Match
+            cur.execute("""
+                SELECT id FROM whatsapp_accounts
+                WHERE phone_number_id = %s
+                ORDER BY id DESC LIMIT 1
+            """, (incoming_phone_id,))
+            account_row = cur.fetchone()
+
+            if account_row:
+                whatsapp_account_id = account_row['id']
+                print(f"✅ Exact Match Found: Account ID {whatsapp_account_id}", file=sys.stdout)
+            else:
+                # B. 🟢 SAFETY FALLBACK: If exact match failed, use the LATEST account
+                print(f"⚠️ Mismatch! Phone ID {incoming_phone_id} not in DB. Using Fallback.", file=sys.stdout)
+                cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+                fallback_row = cur.fetchone()
+                if fallback_row:
+                    whatsapp_account_id = fallback_row['id']
+                    print(f"🔸 Used Latest Account ID: {whatsapp_account_id}", file=sys.stdout)
+
+        # If we STILL don't have an ID, we log critical error but try to continue (will save as NULL)
+        if not whatsapp_account_id:
+            print("❌ CRITICAL: No Accounts found in DB. Message will save as NULL.", file=sys.stdout)
 
         # -------------------------------------------------
-        # A) INCOMING MESSAGES
+        # 4️⃣ CAPTURE CONTACT NAME
+        # -------------------------------------------------
+        contacts_data = value.get("contacts", [])
+        if contacts_data:
+            contact = contacts_data[0]
+            wa_phone = contact.get("wa_id")
+            profile_name = contact.get("profile", {}).get("name")
+
+            if wa_phone and profile_name:
+                try:
+                    cur.execute("""
+                        INSERT INTO contacts (phone, name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (phone)
+                        DO UPDATE SET name = EXCLUDED.name
+                    """, (wa_phone, profile_name))
+                except Exception as e:
+                    print(f"⚠️ Error saving name: {e}")
+
+        # -------------------------------------------------
+        # 5️⃣ PROCESS INCOMING MESSAGES
         # -------------------------------------------------
         messages = value.get("messages", [])
         for msg in messages:
@@ -124,78 +176,63 @@ def webhook():
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
 
-                # Ensure contact exists in DB even if name wasn't sent
+                # Ensure contact exists
                 cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
 
-                # --- TEXT ---
+                # --- A. TEXT MESSAGES ---
                 if msg_type == "text":
                     text = msg.get("text", {}).get("body")
                     if phone and text:
                         cur.execute("""
-                        INSERT INTO messages (
-                            whatsapp_account_id,
-                            user_phone,
-                            sender,
-                            message,
-                            whatsapp_id,
-                            status
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        whatsapp_account_id,
-                        phone,
-                        "customer",
-                        text,
-                        wa_id,
-                        "received"
-                    ))
+                            INSERT INTO messages (
+                                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
+                        """, (whatsapp_account_id, phone, text, wa_id))
 
-
-                # --- MEDIA (Image, Audio, Video, Document, Voice) ---
-                # 🟢 NEW: Handles all media types dynamically
+                # --- B. MEDIA MESSAGES (Image, Audio, Video, Document, Sticker) ---
                 elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
                     media_object = msg.get(msg_type, {})
                     media_id = media_object.get("id")
                     caption = media_object.get("caption", "") # Only image/video/doc have captions
 
-                    # Normalize 'voice' to 'audio' for your frontend logic if preferred,
-                    # or keep as is.
-
                     if phone and media_id:
                         cur.execute("""
                             INSERT INTO messages (
-                                whatsapp_account_id,
-                                user_phone,
-                                sender,
-                                media_type,
-                                media_id,
-                                message,
-                                whatsapp_id,
-                                status
+                                whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            whatsapp_account_id,
-                            phone,
-                            "customer",
-                            msg_type,
-                            media_id,
-                            caption,
-                            wa_id,
-                            "received"
-                        ))
+                            VALUES (%s, %s, 'customer', %s, %s, %s, %s, 'received', NOW())
+                        """, (whatsapp_account_id, phone, msg_type, media_id, caption, wa_id))
 
+                # --- C. INTERACTIVE (Buttons / Lists / Quick Replies) ---
+                elif msg_type == "interactive":
+                    interactive = msg.get("interactive", {})
+                    i_type = interactive.get("type")
+                    text_response = ""
 
-                # --- UNKNOWN ---
+                    if i_type == "button_reply":
+                        text_response = interactive.get("button_reply", {}).get("title")
+                    elif i_type == "list_reply":
+                        text_response = interactive.get("list_reply", {}).get("title")
+
+                    if text_response:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
+                        """, (whatsapp_account_id, phone, text_response, wa_id))
+
+                # --- D. UNKNOWN ---
                 else:
                     print(f"Ignored message type: {msg_type}")
 
             except Exception:
-                print("❌ Error processing incoming message")
+                print("❌ Error processing specific message")
                 traceback.print_exc()
 
         # -------------------------------------------------
-        # B) STATUS UPDATES (Sent -> Delivered -> Read)
+        # 6️⃣ PROCESS STATUS UPDATES
         # -------------------------------------------------
         statuses = value.get("statuses", [])
         for s in statuses:
@@ -204,34 +241,27 @@ def webhook():
                 new_status = s.get("status") # sent, delivered, read
 
                 if wa_id and new_status:
-                    # Check current status first to prevent overwriting "read" with "delivered"
+                    # 🟢 FIX: Update status purely based on Message ID (globally unique).
+                    # Removing the Account ID check here ensures ticks update even if Account ID mapping was fuzzy.
                     cur.execute("""
-                        SELECT status
-                        FROM messages
-                        WHERE whatsapp_id = %s
-                          AND whatsapp_account_id = %s
-                    """, (wa_id, whatsapp_account_id))
+                        SELECT status FROM messages WHERE whatsapp_id = %s
+                    """, (wa_id,))
                     row = cur.fetchone()
 
                     if row:
                         current_status = row['status']
-
                         should_update = True
-                        if current_status == 'read':
-                            should_update = False
-                        elif current_status == 'delivered' and new_status == 'sent':
-                            should_update = False
+
+                        # Logic: read > delivered > sent
+                        if current_status == 'read': should_update = False
+                        elif current_status == 'delivered' and new_status == 'sent': should_update = False
 
                         if should_update:
                             cur.execute("""
-                                UPDATE messages
-                                SET status = %s
-                                WHERE whatsapp_id = %s
-                                  AND whatsapp_account_id = %s
-                            """, (new_status, wa_id, whatsapp_account_id))
+                                UPDATE messages SET status = %s WHERE whatsapp_id = %s
+                            """, (new_status, wa_id))
                     else:
-                        # Message not in DB yet (Race condition)
-                        print(f"⚠️ Status {new_status} received for ID {wa_id}, but message not in DB yet.")
+                        pass # Message might not be in DB yet
 
             except Exception:
                 print("❌ Error processing status update")
@@ -241,12 +271,132 @@ def webhook():
         cur.close()
         conn.close()
 
-    except Exception:
-        print("❌ Fatal Webhook Error")
+    except Exception as e:
+        print(f"❌ Fatal Webhook Error: {e}", file=sys.stdout)
         traceback.print_exc()
+    return "OK", 200
+'''
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    # 1. VERIFICATION
+    if request.method == "GET":
+        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
+            return request.args.get("hub.challenge"), 200
+        return "Verification failed", 403
+
+    # 2. INCOMING EVENTS
+    try:
+        data = request.get_json(silent=True) or {}
+        entry = data.get("entry", [])
+        if not entry: return "OK", 200
+
+        changes = entry[0].get("changes", [])
+        if not changes: return "OK", 200
+
+        value = changes[0].get("value", {})
+
+        # --- DIAGNOSTIC LOGGING ---
+        metadata = value.get("metadata", {})
+        incoming_phone_id = metadata.get("phone_number_id")
+        print(f"🔹 [WEBHOOK] Hit! Phone ID: {incoming_phone_id}", file=sys.stdout)
+        sys.stdout.flush()
+
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 3. IDENTIFY ACCOUNT (With Fallback)
+        whatsapp_account_id = None
+        if incoming_phone_id:
+            cur.execute("SELECT id FROM whatsapp_accounts WHERE phone_number_id = %s", (incoming_phone_id,))
+            row = cur.fetchone()
+            if row:
+                whatsapp_account_id = row['id']
+                print(f"✅ Exact Match: ID {whatsapp_account_id}", file=sys.stdout)
+
+        if not whatsapp_account_id:
+            print("⚠️ Mismatch! Using Fallback to Latest Account.", file=sys.stdout)
+            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            fallback = cur.fetchone()
+            if fallback: whatsapp_account_id = fallback['id']
+
+        # 4. CAPTURE NAME
+        contacts_data = value.get("contacts", [])
+        if contacts_data:
+            contact = contacts_data[0]
+            try:
+                cur.execute("""
+                    INSERT INTO contacts (phone, name) VALUES (%s, %s)
+                    ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name
+                """, (contact.get("wa_id"), contact.get("profile", {}).get("name")))
+            except: pass
+
+        # 5. PROCESS MESSAGES
+        messages = value.get("messages", [])
+        for msg in messages:
+            try:
+                phone = msg.get("from")
+                wa_id = msg.get("id")
+                msg_type = msg.get("type")
+
+                cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
+
+                # Text
+                if msg_type == "text":
+                    text = msg.get("text", {}).get("body")
+                    print(f"webhook inset text:")
+                    cur.execute("""
+                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
+                        VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
+                    """, (whatsapp_account_id, phone, text, wa_id))
+
+                # Media
+                elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
+                    media_obj = msg.get(msg_type, {})
+                    print(f"webhook inset img:")
+                    cur.execute("""
+                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, 'received', NOW())
+                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption",""), wa_id))
+
+                # Interactive (Buttons/Quick Replies)
+                elif msg_type == "interactive":
+                    interactive = msg.get("interactive", {})
+                    i_type = interactive.get("type")
+                    resp = ""
+                    if i_type == "button_reply": resp = interactive.get("button_reply", {}).get("title")
+                    elif i_type == "list_reply": resp = interactive.get("list_reply", {}).get("title")
+
+                    if resp:
+                        print(f"webhook inset interactive:")
+
+                        cur.execute("""
+                            INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
+                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
+                        """, (whatsapp_account_id, phone, resp, wa_id))
+
+            except Exception as e:
+                print(f"❌ Msg Save Error: {e}", file=sys.stdout)
+                traceback.print_exc()
+
+        # 6. STATUS UPDATES
+        statuses = value.get("statuses", [])
+        for s in statuses:
+            cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
+
+        conn.commit()
+        cur.close(); conn.close()
+        sys.stdout.flush()
+
+    except Exception as e:
+        print(f"❌ Webhook Fatal: {e}", file=sys.stdout)
+        traceback.print_exc()
+        sys.stdout.flush()
 
     return "OK", 200
-    # ---------- Auth routes ----------
+
+
+
+            # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
@@ -298,29 +448,21 @@ def typing():
 @app.route("/list_users")
 @login_required
 def list_users():
+    account_id = get_active_account_id()
+    if not account_id: return jsonify([])
+
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # 🔴 pick active whatsapp account (for now: latest connected)
-    cur.execute("""
-        SELECT id
-        FROM whatsapp_accounts
-        ORDER BY id DESC
-        LIMIT 1
-    """)
-    account = cur.fetchone()
-    if not account:
-        return jsonify([])
-
-    account_id = account["id"]
-
+    # 🟢 FIX: Filter specifically by whatsapp_account_id
     query = """
         WITH LastMsg AS (
             SELECT
                 user_phone,
                 MAX(timestamp) as last_ts,
-                COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
+                COUNT(CASE WHEN status = 'received' AND whatsapp_account_id = %s THEN 1 END) as unread_count
             FROM messages
+            WHERE whatsapp_account_id = %s
             GROUP BY user_phone
         )
         SELECT
@@ -331,22 +473,18 @@ def list_users():
             m.message as last_message,
             m.media_type
         FROM contacts c
-        LEFT JOIN LastMsg lm ON c.phone = lm.user_phone
-        LEFT JOIN messages m
-          ON m.user_phone = lm.user_phone
-         AND m.timestamp = lm.last_ts
-        ORDER BY
-            lm.last_ts DESC NULLS LAST,
-            c.phone ASC;
+        INNER JOIN LastMsg lm ON c.phone = lm.user_phone
+        LEFT JOIN messages m ON lm.user_phone = m.user_phone AND lm.last_ts = m.timestamp
+        ORDER BY lm.last_ts DESC
     """
-
     cur.execute(query, (account_id, account_id))
     rows = cur.fetchall()
     cur.close(); conn.close()
 
     for r in rows:
-        if r["last_ts"]:
-            r["last_ts"] = r["last_ts"].isoformat()
+        if r['last_ts']:
+            r['last_ts'] = r['last_ts'].isoformat()
+            if not r['last_ts'].endswith("Z"): r['last_ts'] += "Z" # Timezone fix
 
     return jsonify(rows)
 
@@ -356,29 +494,18 @@ def list_users():
 @login_required
 def history():
     phone = request.args.get("phone")
-    if not phone:
-        return jsonify([])
+    account_id = get_active_account_id()
+
+    if not phone or not account_id: return jsonify([])
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Get active account ID
-    cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
-    account = cur.fetchone()
-    if not account: return jsonify([])
-    account_id = account["id"]
-
+    # 🟢 FIX: Strict filter by account_id so we only see relevant msgs
     cur.execute("""
-        SELECT
-            sender,
-            message,
-            media_type,
-            media_id,
-            status,
-            timestamp
+        SELECT sender, message, media_type, media_id, status, timestamp
         FROM messages
-        WHERE user_phone = %s
-          AND whatsapp_account_id = %s
+        WHERE user_phone = %s AND whatsapp_account_id = %s
         ORDER BY timestamp ASC
     """, (phone, account_id))
 
@@ -387,24 +514,13 @@ def history():
 
     results = []
     for r in rows:
-        ts_iso = None
-        if r["timestamp"]:
-            ts_iso = r["timestamp"].isoformat()
-            # 🟢 FIX: Force UTC 'Z' if missing.
-            # This ensures browser converts 9:00 UTC to 2:00 PM PKT correctly.
-            if not ts_iso.endswith("Z") and "+" not in ts_iso:
-                ts_iso += "Z"
-
-        results.append({
-            "sender": r["sender"],
-            "message": r["message"],
-            "media_type": r["media_type"],
-            "media_id": r["media_id"],
-            "status": r["status"],
-            "timestamp": ts_iso
-        })
+        ts = r["timestamp"].isoformat() if r["timestamp"] else ""
+        if ts and not ts.endswith("Z"): ts += "Z" # Timezone fix
+        r["timestamp"] = ts
+        results.append(r)
 
     return jsonify(results)
+
 
 @app.route("/send_text", methods=["POST"])
 def send_text():
@@ -412,50 +528,36 @@ def send_text():
     phone = data.get("phone")
     text = data.get("text")
 
-    # In a SaaS, you usually determine the 'sender' based on the logged-in user
-    # or the active chat context.
-    # For now, let's assume we pick the first available account or pass it in data.
-    # If you have multiple accounts, you need logic here to pick WHICH one to send from.
-
-    # 🟢 Simple Logic: Get the last account added (or specific one)
     conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT phone_number_id, access_token FROM whatsapp_accounts LIMIT 1")
+
+    # 🟢 Get Credentials for the LATEST Active Account
+    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
     account = cur.fetchone()
-    cur.close(); conn.close()
 
     if not account:
-        return jsonify({"error": "No connected WhatsApp accounts found"}), 400
+        cur.close(); conn.close()
+        return jsonify({"error": "No account connected"}), 400
 
-    phone_id = account['phone_number_id']
-    token = account['access_token']
-
-    url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "text",
-        "text": {"body": text}
-    }
-    print("USING TOKEN:", WHATSAPP_TOKEN[:10])
-
+    url = f"https://graph.facebook.com/v20.0/{account['phone_number_id']}/messages"
+    headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": text}}
 
     try:
         resp = requests.post(url, json=payload, headers=headers)
-        json_resp = resp.json()
+        wa_id = resp.json().get("messages", [{}])[0].get("id")
+        print("sned_text")
+        # 🟢 CRITICAL: Save using account['id'] so it matches the /history endpoint
+        cur.execute("""
+            INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+        """, (account['id'], phone, text, wa_id))
 
-        # Save to DB
-        if "messages" in json_resp:
-            wa_id = json_resp["messages"][0]["id"]
-            # Save logic...
-            return jsonify({"success": True})
-        else:
-            return jsonify(json_resp), 400
+        conn.commit()
+        return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
 
 
 @app.route("/send_media", methods=["POST"])
@@ -474,6 +576,7 @@ def send_media():
     if isinstance(resp, dict) and resp.get("messages"):
         wa_id = resp["messages"][0].get("id")
     conn = get_conn(); cur = conn.cursor()
+    print("send_media")
     cur.execute("""
         INSERT INTO messages (user_phone, sender, message, media_url, timestamp, whatsapp_id, status)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -716,6 +819,7 @@ def send_design():
         # -------------------------------------------------
         # 5️⃣ Save outbound message
         # -------------------------------------------------
+        print("send_design")
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
@@ -840,6 +944,8 @@ def send_attachment():
         wa_id = send_resp.get("messages", [{}])[0].get("id")
 
         conn = get_conn(); cur = conn.cursor()
+        print("send_attachment")
+
         cur.execute("""
             INSERT INTO messages (user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
             VALUES (%s, 'agent', %s, %s, %s, %s, 'sent', NOW())
@@ -987,6 +1093,7 @@ def send_template():
         if "messages" in json_resp:
             wa_id = json_resp["messages"][0]["id"]
             conn = get_conn(); cur = conn.cursor()
+            print("send_template")
 
             # 🟢 Save the ACTUAL template text to the database
             cur.execute("""
@@ -1343,6 +1450,7 @@ def get_account_by_phone_id(phone_number_id):
 def save_message(account_id, phone, sender, message, wamid):
     conn = get_conn()
     cur = conn.cursor()
+    print("save_message")
 
     cur.execute("""
         INSERT INTO messages (whatsapp_account_id, phone, sender, message, wamid)
@@ -1356,10 +1464,13 @@ def save_message(account_id, phone, sender, message, wamid):
 def get_whatsapp_account_id(phone_number_id):
     conn = get_conn()
     cur = conn.cursor()
+    # 🟢 FIX: If duplicates exist, pick the LATEST one to match Frontend logic
     cur.execute("""
         SELECT id
         FROM whatsapp_accounts
         WHERE phone_number_id = %s
+        ORDER BY id DESC
+        LIMIT 1
     """, (phone_number_id,))
     row = cur.fetchone()
     cur.close()
