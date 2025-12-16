@@ -381,7 +381,7 @@
                 const resp = await fetch(`/history?phone=${currentPhone}`);
                 const msgs = await resp.json();
 
-                if (isSending) return; // Double check lock
+                if (isSending) return;
 
                 container.innerHTML = `<div style="text-align:center; margin-top:20px; color:#8696a0; font-size:12px;"><span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.</div>`;
                 lastUserMsgTime = null;
@@ -389,34 +389,61 @@
                 msgs.forEach(m => {
                     const isSent = m.sender === 'agent';
 
-                    // 🟢 TIMER LOGIC: Capture time of last RECEIVED message
+                    // Track last received message for the 24h timer
                     if (!isSent) {
-                        const ts = new Date(m.timestamp); // Browser converts 'Z' time to Local Time here
-                        if (!lastUserMsgTime || ts > lastUserMsgTime) {
-                            lastUserMsgTime = ts;
-                        }
+                        const ts = new Date(m.timestamp);
+                        if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
                     }
 
-                    // ... (Rendering logic remains the same) ...
                     const div = document.createElement('div');
                     div.className = `msg ${isSent ? 'sent' : 'received'}`;
-                    // ... content generation ...
-                    let content = m.media_id ? (m.message ? linkify(m.message) : "📷 Media") : linkify(m.message);
+
+                    let content = '';
+
+                    // 🟢 MEDIA HANDLING LOGIC
+                    if (m.media_id) {
+                        // 1. Audio / Voice Note
+                        if (m.media_type === 'audio' || m.media_type === 'voice') {
+                            content = `<audio controls src="/media/${m.media_id}"></audio>`;
+                        }
+                        // 2. Video
+                        else if (m.media_type === 'video') {
+                            content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+                        }
+                        // 3. Document / PDF
+                        else if (m.media_type === 'document') {
+                            content = `
+                                <div style="display:flex; align-items:center; gap:8px; background:rgba(0,0,0,0.2); padding:10px; border-radius:5px;">
+                                    <span class="material-icons">description</span>
+                                    <a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text); text-decoration:none;">Download Document</a>
+                                </div>`;
+                        }
+                        // 4. Image (Default)
+                        else {
+                            content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" alt="Image">`;
+                        }
+
+                        // Add Caption if it exists (and isn't audio)
+                        if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
+                            content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+                        }
+                    }
+                    // 🟢 TEXT MESSAGE
+                    else {
+                        content = linkify(m.message);
+                    }
 
                     const time = new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
                     const tickHtml = isSent ? getTickHtml(m.status) : '';
+
                     div.innerHTML = `${content} <div class="msg-meta">${time} ${tickHtml}</div>`;
                     container.appendChild(div);
                 });
 
                 if (forceScroll) container.scrollTop = container.scrollHeight;
-
-                // Update the visual timer immediately
                 updateSessionTimer();
-
             } catch(e) { console.log("Refresh skipped"); }
         }
-
 
     // --- SENDING ---
     async function sendMessage() {
