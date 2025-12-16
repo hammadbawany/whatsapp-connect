@@ -7,55 +7,6 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
-
-
-    .context-menu {
-    display: none;
-    position: absolute;
-    z-index: 1000;
-    background-color: var(--header-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    padding: 5px 0;
-    width: 180px;
-}
-.context-menu-item {
-    padding: 8px 15px;
-    color: var(--primary-text);
-    cursor: pointer;
-    font-size: 14px;
-}
-.context-menu-item:hover {
-    background-color: #2a3942;
-}
-
-    /* 🟢 UPDATED: SMALLER IMAGES */
-
-    .template-body {
-    font-size: 12px;
-    color: var(--secondary-text);
-    margin-top: 5px;
-
-    /* Limits text to exactly 4 lines */
-    display: -webkit-box;
-    -webkit-line-clamp: 4;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    line-height: 1.4; /* Improves readability */
-}
-.chat-media {
-    max-width: 200px;        /* Limits width */
-    max-height: 200px;       /* Limits height (for tall images) */
-    width: auto;             /* Maintains aspect ratio */
-    height: auto;            /* Maintains aspect ratio */
-    object-fit: contain;     /* Ensures image isn't stretched/cropped */
-    border-radius: 6px;
-    margin-top: 5px;
-    cursor: pointer;         /* Shows hand icon on hover */
-    background-color: rgba(0,0,0,0.1); /* Subtle background while loading */
-}
         :root {
             --bg-color: #0c1317; --sidebar-bg: #111b21; --header-bg: #202c33;
             --border-color: #2a3942; --incoming-bg: #202c33; --outgoing-bg: #005c4b;
@@ -121,6 +72,12 @@
         .phone-link { color: #53bdeb; cursor: pointer; text-decoration: none; font-weight: 500; }
         .phone-link:hover { text-decoration: underline; }
 
+        .chat-media {
+            max-width: 200px; max-height: 200px; width: auto; height: auto;
+            object-fit: contain; border-radius: 6px; margin-top: 5px;
+            cursor: pointer; background-color: rgba(0,0,0,0.1);
+        }
+
         #footer { min-height: 62px; background: var(--header-bg); padding: 5px 16px; display: flex; align-items: center; gap: 10px; z-index: 2; position: relative;}
         .input-bar:disabled { opacity: 0.5; cursor: not-allowed; }
         .input-bar {
@@ -149,6 +106,11 @@
         .slash-item:hover { background: #111b21; }
         .slash-shortcut { color: var(--accent); font-weight: bold; }
 
+        /* CONTEXT MENU */
+        .context-menu { display: none; position: absolute; z-index: 1000; background-color: var(--header-bg); border: 1px solid var(--border-color); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 5px 0; width: 180px; }
+        .context-menu-item { padding: 8px 15px; color: var(--primary-text); cursor: pointer; font-size: 14px; }
+        .context-menu-item:hover { background-color: #2a3942; }
+
         /* MODALS */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: none; place-items: center; z-index: 200; }
         .modal { background: var(--header-bg); padding: 20px; border-radius: 10px; width: 450px; color: #fff; display: flex; flex-direction: column; gap: 15px; max-height: 80vh; }
@@ -162,10 +124,11 @@
         #template-list, #qr-manage-list { overflow-y: auto; max-height: 300px; display: flex; flex-direction: column; gap: 10px; }
         .template-item, .qr-row { background: #111b21; padding: 10px; border-radius: 5px; cursor: pointer; border: 1px solid transparent; position: relative;}
         .template-item:hover { border-color: var(--accent); }
+        .template-body { font-size: 12px; color: var(--secondary-text); margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
         .qr-delete { position: absolute; right: 10px; top: 10px; color: red; cursor: pointer; display: none; }
         .qr-row:hover .qr-delete { display: block; }
 
-        /* PREVIEW AREA */
+        /* PREVIEW & IMAGE VIEWER */
         #preview-container { width: 100%; max-height: 300px; overflow: hidden; display: flex; justify-content: center; background: #000; border-radius: 5px;}
         #preview-img { max-width: 100%; max-height: 300px; object-fit: contain; }
         #preview-video { max-width: 100%; max-height: 300px; }
@@ -173,77 +136,27 @@
         .rec-dot { width: 10px; height: 10px; background: red; border-radius: 50%; animation: blink 1s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* 🟢 IMAGE VIEWER (LIGHTBOX) STYLES */
-#image-viewer {
-    display: none;
-    position: fixed;
-    z-index: 3000; /* Highest priority */
-    padding-top: 50px;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0, 0, 0, 0.9);
-    cursor: zoom-out;
-}
-
-#full-image {
-    margin: auto;
-    display: block;
-    width: auto;
-    height: auto;
-    max-width: 90%;
-    max-height: 90vh;
-    object-fit: contain;
-    animation-name: zoom;
-    animation-duration: 0.3s;
-    border-radius: 5px;
-    box-shadow: 0 0 20px rgba(255,255,255,0.1);
-}
-
-#viewer-close {
-    position: absolute;
-    top: 15px;
-    right: 35px;
-    color: #f1f1f1;
-    font-size: 40px;
-    font-weight: bold;
-    transition: 0.3s;
-    cursor: pointer;
-}
-
-#viewer-close:hover,
-#viewer-close:focus {
-    color: #bbb;
-    text-decoration: none;
-    cursor: pointer;
-}
-
-@keyframes zoom {
-    from {transform:scale(0)}
-    to {transform:scale(1)}
-}
-
+        #image-viewer { display: none; position: fixed; z-index: 3000; padding-top: 50px; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0, 0, 0, 0.9); cursor: zoom-out; justify-content: center; align-items: center; }
+        #full-image { margin: auto; display: block; width: auto; height: auto; max-width: 90%; max-height: 90vh; object-fit: contain; animation-name: zoom; animation-duration: 0.3s; border-radius: 5px; box-shadow: 0 0 20px rgba(255,255,255,0.1); }
+        #viewer-close { position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; transition: 0.3s; cursor: pointer; }
+        @keyframes zoom { from {transform:scale(0)} to {transform:scale(1)} }
     </style>
 </head>
 <body>
-  <!-- 🟢 CONTEXT MENU (Hidden by default) -->
-  <div id="context-menu" class="context-menu">
-      <div class="context-menu-item" onclick="markChatUnread()">Mark as unread</div>
-  </div>
 
 <div id="app">
     <!-- SIDEBAR -->
     <aside id="sidebar">
-      <div class="header">
-          <div class="my-avatar" id="my-avatar" title="My Profile"><span class="material-icons">person</span></div>
-          <div style="display: flex; gap: 15px;">
-              <span class="material-icons icon-btn" title="New Chat" onclick="showNewChatModal()">chat</span>
-              <span class="material-icons icon-btn" title="Logout" onclick="window.location.href='/logout'">logout</span>
-          </div>
-      </div>
-
+        <div class="header">
+            <div class="my-avatar" id="my-avatar" title="My Profile"><span class="material-icons">person</span></div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button onclick="window.location.href='/whatsapp/connect'" style="background: #25D366; border:none; border-radius: 4px; color:white; font-weight:bold; cursor:pointer; padding: 5px 10px; font-size: 12px; display: flex; align-items: center; gap: 5px;">
+                    <span class="material-icons" style="font-size: 14px;">link</span> Connect
+                </button>
+                <span class="material-icons icon-btn" title="New Chat" onclick="showNewChatModal()">chat</span>
+                <span class="material-icons icon-btn" title="Logout" onclick="window.location.href='/logout'">logout</span>
+            </div>
+        </div>
         <div class="filter-bar">
             <div class="filter-chip active" onclick="setFilter('all', this)">All</div>
             <div class="filter-chip" onclick="setFilter('unread', this)">Unread</div>
@@ -281,7 +194,10 @@
             <!-- TEMPLATE BUTTON -->
             <button class="template-btn" onclick="openTemplateModal()">Template</button>
 
+            <!-- SEND BUTTON (Visibility toggled by JS) -->
             <span class="material-icons icon-btn" id="send-btn" onclick="sendMessage()" style="display:none;">send</span>
+
+            <!-- MIC BUTTON (Default visible) -->
             <span class="material-icons icon-btn" id="mic-btn" onclick="startRecording()">mic</span>
 
             <div id="recording-ui">
@@ -297,22 +213,27 @@
                 <div class="attach-opt" onclick="triggerUpload('document')"><span class="material-icons" style="color:#5f66cd;">description</span> Document</div>
             </div>
 
-            <!-- QUICK REPLY MENU -->
             <div class="quick-reply-menu" id="quick-reply-menu">
                 <div id="qr-list-content"></div>
                 <div class="qr-manage-btn" onclick="openManageQRModal()">➕ Add / Manage Replies</div>
             </div>
 
-            <!-- SLASH POPUP -->
             <div id="slash-popup"></div>
         </footer>
     </main>
 </div>
-<!-- 🟢 IMAGE VIEWER CONTAINER -->
+
+<!-- CONTEXT MENU -->
+<div id="context-menu" class="context-menu">
+    <div class="context-menu-item" onclick="markChatUnread()">Mark as unread</div>
+</div>
+
+<!-- IMAGE VIEWER -->
 <div id="image-viewer" onclick="closeImageViewer()">
     <span id="viewer-close">&times;</span>
     <img class="modal-content" id="full-image">
 </div>
+
 <!-- MODALS -->
 <div class="modal-overlay" id="new-chat-modal">
     <div class="modal">
@@ -341,7 +262,6 @@
     </div>
 </div>
 
-<!-- MANAGE QUICK REPLIES MODAL -->
 <div class="modal-overlay" id="manage-qr-modal">
     <div class="modal" style="width: 600px;">
         <h3>Manage Quick Replies</h3>
@@ -364,11 +284,10 @@
 <input type="file" id="hidden-file-input" style="display:none;">
 
 <script>
-
-    // VARS
+    // --- VARIABLES ---
     let currentPhone = null;
-    let refreshTimer = null;
     let chatListTimer = null;
+    let chatHistoryTimer = null;
     let allChats = [], allTemplates = [], quickReplies = [];
     let currentFilter = 'all';
     let isSending = false;
@@ -376,46 +295,14 @@
     let pendingFile = null, pendingFileType = null;
     let lastUserMsgTime = null;
 
-
-    // --- CONTEXT MENU LOGIC ---
-        let contextMenuPhone = null;
-
-        function showContextMenu(event, phone) {
-            event.preventDefault(); // Stop the default browser right-click menu
-
-            const menu = document.getElementById('context-menu');
-            menu.style.display = 'block';
-            menu.style.left = event.pageX + 'px';
-            menu.style.top = event.pageY + 'px';
-
-            contextMenuPhone = phone; // Store which phone was clicked
-        }
-
-        // Hide menu if user clicks away
-        window.addEventListener('click', () => {
-            document.getElementById('context-menu').style.display = 'none';
-        });
-
-        async function markChatUnread() {
-            if (!contextMenuPhone) return;
-
-            await fetch('/mark_unread', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ phone: contextMenuPhone })
-            });
-
-            // Refresh the chat list to show the green badge
-            loadChats();
-        }
-
-    // INIT
+    // --- INITIALIZATION ---
     loadChats(); loadMyProfile(); loadQuickReplies();
-//1.    setInterval(() => loadChats(), 4000); // Poll chat list
+    chatListTimer = setInterval(updateUnreadCounts, 10000); // 🟢 SMART POLLING (UNREAD ONLY)
 
-    setInterval(() => loadChats(), 4000); // Poll chat list
-    // INPUT LISTENERS
+    // --- INPUT HANDLERS ---
     const msgInput = document.getElementById('msg-input');
+
+    // Toggle Send/Mic Button & Slash Commands
     msgInput.addEventListener('input', function(e) {
         checkInput();
         const val = this.value;
@@ -427,6 +314,8 @@
             document.getElementById('slash-popup').style.display = 'none';
         }
     });
+
+    // 🟢 ENTER KEY HANDLER
     msgInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -438,394 +327,217 @@
         msgInput.value += event.detail.unicode; toggleEmoji(); msgInput.focus(); checkInput();
     });
 
-    // --- SIDEBAR / CHAT LIST LOGIC ---
+    // --- UTILS ---
+    function getAvatarColor(key) { if(!key) return '#607D8B'; const colors=['#F44336','#E91E63','#9C27B0','#673AB7','#3F51B5','#2196F3','#009688','#4CAF50','#FF9800','#FF5722','#795548','#607D8B']; let h=0; for(let i=0;i<key.length;i++) h=key.charCodeAt(i)+((h<<5)-h); return colors[Math.abs(h)%colors.length]; }
+    function getInitials(name) { if (!name) return "?"; const p=name.trim().split(" "); return p.length>=2?(p[0][0]+p[p.length-1][0]).toUpperCase():p[0][0].toUpperCase(); }
+    function getTickHtml(s) { if(!s)return''; let i='done',c='sent'; if(s==='delivered'){i='done_all';c='delivered';} else if(s==='read'){i='done_all';c='read';} return `<span class="material-icons tick ${c}">${i}</span>`; }
+    function linkify(t) { if(!t)return""; let f=t.replace(/\n/g,'<br>'); return f.replace(/(?:\+|00|0)(?:92|3)\d{9,13}/g, m=>`<span class="phone-link" onclick="handleLinkClick('${m}')">${m}</span>`); }
+    function handleLinkClick(n) { openChat(n.replace(/\D/g,''), null); }
+    function checkInput() {
+        const val = msgInput.value.trim();
+        const isExpired = msgInput.disabled;
+        if (isExpired) return;
+        document.getElementById('send-btn').style.display = val ? 'block' : 'none';
+        document.getElementById('mic-btn').style.display = val ? 'none' : 'block';
+    }
+
+    // --- DATA LOADING ---
+    async function loadMyProfile() { try { const r=await fetch('/me'); if(r.ok){ const d=await r.json(); const a=document.getElementById('my-avatar'); a.style.backgroundColor=getAvatarColor(d.username); a.innerText=getInitials(d.username); } } catch(e){} }
+
     async function loadChats() {
-        if (document.querySelector('.search-input').value.trim() !== "") return;
         try {
             const resp = await fetch('/list_users');
             allChats = await resp.json();
             renderChatList();
-        } catch(e) { console.error(e); }
+        } catch(e) { console.error("Load Chats Failed", e); }
+    }
+
+    // 🟢 SMART UNREAD UPDATE
+    async function updateUnreadCounts() {
+        try {
+            const resp = await fetch('/unread_counts');
+            const counts = await resp.json();
+            document.querySelectorAll('.unread-badge').forEach(b => b.remove());
+            for (const phone in counts) {
+                if (phone !== currentPhone) {
+                    const chatItem = document.getElementById(`chat-item-${phone}`);
+                    if (chatItem) {
+                        const msgContainer = chatItem.querySelectorAll('.chat-top')[1];
+                        const badge = document.createElement('div');
+                        badge.className = 'unread-badge';
+                        badge.innerText = counts[phone];
+                        msgContainer.appendChild(badge);
+                    }
+                }
+            }
+        } catch(e) {}
     }
 
     function renderChatList() {
-            const list = document.getElementById('chat-list');
-            const filtered = allChats.filter(c => {
-                if (currentFilter === 'unread') return c.unread_count > 0;
-                return true;
-            });
+        const list = document.getElementById('chat-list');
+        list.innerHTML = '';
+        const filtered = allChats.filter(c => (currentFilter === 'unread' ? c.unread_count > 0 : true));
+        filtered.forEach(c => {
+            const div = document.createElement('div');
+            div.id = `chat-item-${c.phone}`;
+            div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+            div.dataset.phone = c.phone;
 
-            filtered.forEach((c, index) => {
-                let div = document.getElementById(`chat-item-${c.phone}`);
+            // 🟢 RESTORED CLICK & CONTEXT MENU
+            div.onclick = () => openChat(c.phone, c.name);
+            div.oncontextmenu = (e) => showContextMenu(e, c.phone);
 
-                // ... (keep existing variable definitions for timeStr, unreadHtml etc.) ...
-                const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-                let unreadCount = c.unread_count;
-                if (currentPhone === c.phone) unreadCount = 0;
-                const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
-                const bgColor = getAvatarColor(c.phone);
-                const initials = c.name ? getInitials(c.name) : "?";
-                const displayName = c.name || c.phone;
-                const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
+            const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+            let unreadCount = c.unread_count; if (currentPhone === c.phone) unreadCount = 0;
+            const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
+            const bgColor = getAvatarColor(c.phone); const initials = c.name ? getInitials(c.name) : "?"; const displayName = c.name || c.phone; const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
+            div.innerHTML = `<div class="chat-avatar" style="background-color: ${bgColor};">${initials}</div><div class="chat-info"><div class="chat-top"><span class="chat-name">${displayName}</span><span class="chat-time">${timeStr}</span></div><div class="chat-top"><span class="chat-msg">${previewMsg}</span>${unreadHtml}</div></div>`;
+            list.appendChild(div);
+        });
+    }
 
-                const htmlContent = `
-                    <div class="chat-avatar" style="background-color: ${bgColor};">${initials}</div>
-                    <div class="chat-info">
-                        <div class="chat-top">
-                            <span class="chat-name">${displayName}</span>
-                            <span class="chat-time">${timeStr}</span>
-                        </div>
-                        <div class="chat-top">
-                            <span class="chat-msg">${previewMsg}</span>
-                            ${unreadHtml}
-                        </div>
-                    </div>`;
-
-                if (!div) {
-                    div = document.createElement('div');
-                    div.id = `chat-item-${c.phone}`;
-                    div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
-                    //div.onclick = () => openChat(c.phone, c.name);
-                    // LEFT CLICK: Open Chat
-                    div.onclick = () => openChat(c.phone, c.name);
-
-                    // RIGHT CLICK: Show Menu
-                    div.oncontextmenu = (e) => showContextMenu(e, c.phone);
-                    div.innerHTML = htmlContent;
-
-                    // 🟢 ADD THIS LINE: Store phone for search
-                    div.dataset.phone = c.phone;
-
-                    list.appendChild(div);
-                } else {
-                    div.innerHTML = htmlContent;
-                    // 🟢 ADD THIS LINE HERE TOO (for updates)
-                    div.dataset.phone = c.phone;
-
-                    if(currentPhone === c.phone) div.classList.add('active');
-                    else div.classList.remove('active');
-                }
-                if (list.children[index] !== div) list.insertBefore(div, list.children[index]);
-            });
-        }
-
-
-    // --- CHAT WINDOW LOGIC ---
+    // --- CHAT LOGIC ---
     async function openChat(phone, name) {
         if(currentPhone === phone) return;
+
+        // 🟢 FIX FLICKER: STOP OLD TIMERS
+        if (chatHistoryTimer) clearInterval(chatHistoryTimer);
+
         currentPhone = phone;
+
+        document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+        const activeItem = document.getElementById(`chat-item-${phone}`);
+        if(activeItem) {
+            activeItem.classList.add('active');
+            const badge = activeItem.querySelector('.unread-badge');
+            if (badge) badge.remove();
+        }
 
         document.getElementById('active-contact').innerText = name || phone;
         document.getElementById('active-name').innerText = name ? phone : '';
         const headerAvatar = document.getElementById('header-avatar');
         headerAvatar.style.backgroundColor = getAvatarColor(phone);
         headerAvatar.innerText = name ? getInitials(name) : "?";
-
         document.getElementById('msg-input').disabled = false;
         document.getElementById('msg-input').focus();
-        document.getElementById('send-btn').style.display = 'none';
-
-        const div = document.getElementById(`chat-item-${phone}`);
-        if(div) {
-            div.classList.add('active');
-            const badge = div.querySelector('.unread-badge');
-            if(badge) badge.remove();
-        }
+        document.getElementById('messages').innerHTML = '<div style="text-align:center; padding:50px;">Loading...</div>';
 
         fetch('/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})});
 
-        if (refreshTimer) clearInterval(refreshTimer);
-        refreshTimer = setInterval(refreshChat, 3000);
-        //refreshTimer = setInterval(refreshChat, 3000);
-
         await refreshChat(true);
+        // 🟢 RESTART TIMER FOR NEW CHAT
+        chatHistoryTimer = setInterval(refreshChat, 3000);
     }
 
     async function refreshChat(forceScroll = false) {
-            if (!currentPhone || isSending) return;
-            try {
-                const container = document.getElementById('messages');
-                const resp = await fetch(`/history?phone=${currentPhone}`);
-                const msgs = await resp.json();
-
-                if (isSending) return;
-
-                container.innerHTML = `<div style="text-align:center; margin-top:20px; color:#8696a0; font-size:12px;"><span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.</div>`;
-                lastUserMsgTime = null;
-
-                msgs.forEach(m => {
-                    const isSent = m.sender === 'agent';
-
-                    // Track last received message for the 24h timer
-                    if (!isSent) {
-                        const ts = new Date(m.timestamp);
-                        if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
-                    }
-
-                    const div = document.createElement('div');
-                    div.className = `msg ${isSent ? 'sent' : 'received'}`;
-
-                    let content = '';
-
-                    // 🟢 MEDIA HANDLING LOGIC
-                    if (m.media_id) {
-                        // 1. Audio / Voice Note
-                        if (m.media_type === 'audio' || m.media_type === 'voice') {
-                            content = `<audio controls src="/media/${m.media_id}"></audio>`;
-                        }
-                        // 2. Video
-                        else if (m.media_type === 'video') {
-                            content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
-                        }
-                        // 3. Document / PDF
-                        else if (m.media_type === 'document') {
-                            content = `
-                                <div style="display:flex; align-items:center; gap:8px; background:rgba(0,0,0,0.2); padding:10px; border-radius:5px;">
-                                    <span class="material-icons">description</span>
-                                    <a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text); text-decoration:none;">Download Document</a>
-                                </div>`;
-                        }
-                        // 4. Image (Default)
-                        else {
-                            content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" alt="Image" onclick="openImageViewer(this.src)" onerror="this.style.display='none';">`;                        }
-
-                        // Add Caption if it exists (and isn't audio)
-                        if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
-                            content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
-                        }
-                    }
-                    // 🟢 TEXT MESSAGE
-                    else {
-                        content = linkify(m.message);
-                    }
-
-                    const time = new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-                    const tickHtml = isSent ? getTickHtml(m.status) : '';
-
-                    div.innerHTML = `${content} <div class="msg-meta">${time} ${tickHtml}</div>`;
-                    container.appendChild(div);
-                });
-
-                if (forceScroll) container.scrollTop = container.scrollHeight;
-                updateSessionTimer();
-            } catch(e) { console.log("Refresh skipped"); }
-        }
-
-    // --- SENDING ---
-    async function sendMessage() {
-            const txt = msgInput.value.trim();
-            if (!txt || !currentPhone) return;
-
-            // 🟢 FIX 1: LOCK THE SCREEN
-            // Stop the auto-refresher so it doesn't wipe the new message
-            if (refreshTimer) clearInterval(refreshTimer);
-            isSending = true;
-
-            msgInput.value = '';
-            checkInput();
-
-            // Optimistic UI (Show immediately)
+        if (!currentPhone || isSending) return;
+        try {
             const container = document.getElementById('messages');
-            container.insertAdjacentHTML('beforeend', `<div class="msg sent">${linkify(txt)} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`);
-            container.scrollTop = container.scrollHeight;
+            const resp = await fetch(`/history?phone=${currentPhone}`);
+            const msgs = await resp.json();
 
-            try {
-                await fetch('/send_text', {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({phone: currentPhone, text: txt})
-                });
-            } catch(e) { console.error(e); }
+            if (isSending) return;
 
-            // 🟢 FIX 2: UNLOCK AFTER DELAY
-            // Wait 1.5 seconds for DB to save, then restart the refresher
-            setTimeout(() => {
-                isSending = false;
-                refreshChat(false); // Silent update to get real status
+            container.innerHTML = `<div style="text-align:center; margin:20px; color:#8696a0; font-size:12px;"><span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.</div>`;
+            lastUserMsgTime = null;
 
-                // Restart the polling loop
-                refreshTimer = setInterval(refreshChat, 3000);
+            msgs.forEach(m => {
+                const isSent = m.sender === 'agent';
+                if (!isSent) {
+                    const ts = new Date(m.timestamp);
+                    if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
+                }
+                const div = document.createElement('div'); div.className = `msg ${isSent ? 'sent' : 'received'}`;
+                let content = '';
+                if (m.media_id) {
+                    if (m.media_type==='audio'||m.media_type==='voice') content = `<audio controls src="/media/${m.media_id}"></audio>`;
+                    else if (m.media_type==='video') content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+                    else if (m.media_type==='document') content = `<div style="padding:10px;"><a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text);">📄 Download</a></div>`;
+                    else content = `<img src="/media/${m.media_id}" class="chat-media" onclick="openImageViewer(this.src)">`;
+                    if (m.message && m.media_type!=='audio' && m.media_type!=='voice') content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+                } else { content = linkify(m.message); }
+                const time = new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                const tickHtml = isSent ? getTickHtml(m.status) : '';
+                div.innerHTML = `${content} <div class="msg-meta">${time} ${tickHtml}</div>`;
+                container.appendChild(div);
+            });
 
-//                refreshTimer = setInterval(refreshChat, 3000);
-            }, 1500);
-        }
+            if (forceScroll) container.scrollTop = container.scrollHeight;
+            updateSessionTimer();
+        } catch(e) {}
+    }
 
+    async function sendMessage() {
+        const txt = msgInput.value.trim();
+        if (!txt || !currentPhone) return;
+
+        isSending = true;
+        if (chatHistoryTimer) clearInterval(chatHistoryTimer);
+
+        msgInput.value = '';
+        checkInput();
+
+        const container = document.getElementById('messages');
+        container.insertAdjacentHTML('beforeend', `<div class="msg sent">${linkify(txt)} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`);
+        container.scrollTop = container.scrollHeight;
+
+        try { await fetch('/send_text', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({phone: currentPhone, text: txt}) }); } catch(e) {}
+
+        setTimeout(() => {
+            isSending = false;
+            refreshChat(false);
+            chatHistoryTimer = setInterval(refreshChat, 3000);
+        }, 1500);
+    }
 
     // --- QUICK REPLIES ---
-    async function loadQuickReplies() { try { const resp = await fetch('/quick_replies'); quickReplies = await resp.json(); } catch(e) {} }
-
-    function toggleQuickReplies() {
-        const menu = document.getElementById('quick-reply-menu');
-        if (menu.style.display === 'flex') menu.style.display = 'none';
-        else { renderQuickReplyMenu(); menu.style.display = 'flex'; }
-    }
-
-    function renderQuickReplyMenu() {
-        const list = document.getElementById('qr-list-content');
-        list.innerHTML = '';
-        if(quickReplies.length === 0) list.innerHTML = '<div style="padding:10px; color:#aaa; text-align:center">No replies found. Add one!</div>';
-        quickReplies.forEach(qr => {
-            const div = document.createElement('div'); div.className = 'qr-item';
-            div.innerHTML = `<strong>/${qr.shortcut}</strong> ${qr.message.substring(0, 40)}...`;
-            div.onclick = () => insertQuickReply(qr.message);
-            list.appendChild(div);
-        });
-    }
-
-    function showSlashPopup(query) {
-        const popup = document.getElementById('slash-popup');
-        const filtered = quickReplies.filter(qr => qr.shortcut.toLowerCase().includes(query.toLowerCase()));
-        if (filtered.length === 0) { popup.style.display = 'none'; return; }
-        popup.innerHTML = '';
-        filtered.forEach(qr => {
-            const div = document.createElement('div'); div.className = 'slash-item';
-            div.innerHTML = `<span class="slash-shortcut">/${qr.shortcut}</span> ${qr.message.substring(0, 50)}`;
-            div.onclick = () => {
-                const val = msgInput.value;
-                const lastSlashIndex = val.lastIndexOf('/');
-                msgInput.value = val.substring(0, lastSlashIndex) + qr.message;
-                popup.style.display = 'none'; msgInput.focus(); checkInput();
-            };
-            popup.appendChild(div);
-        });
-        popup.style.display = 'block';
-    }
-
-    function insertQuickReply(msg) {
-        msgInput.value = msg; msgInput.focus(); checkInput();
-        document.getElementById('quick-reply-menu').style.display = 'none';
-    }
-
-    // --- MANAGE QR ---
-    function openManageQRModal() {
-        document.getElementById('quick-reply-menu').style.display = 'none';
-        document.getElementById('manage-qr-modal').style.display = 'grid';
-        resetQRForm(); renderManageQRList();
-    }
-    function renderManageQRList() {
-        const list = document.getElementById('qr-manage-list'); list.innerHTML = '';
-        quickReplies.forEach(qr => {
-            const div = document.createElement('div'); div.className = 'qr-row';
-            const displayMsg = qr.message.replace(/\n/g, '<br>');
-            div.innerHTML = `<div style="flex:1;"><span style="color:var(--accent); font-weight:bold;">/${qr.shortcut}</span><div style="font-size:13px; color:#ccc; margin-top:2px;">${displayMsg}</div></div><div style="display:flex; gap:10px; align-items:center;"><span class="material-icons" style="color:#53bdeb; cursor:pointer; font-size:20px;" onclick="startEditQR(${qr.id})">edit</span><span class="material-icons" style="color:#ff4444; cursor:pointer; font-size:20px;" onclick="deleteQuickReply(${qr.id})">delete</span></div>`;
-            list.appendChild(div);
-        });
-    }
-    function startEditQR(id) {
-        const qr = quickReplies.find(q => q.id === id); if (!qr) return;
-        document.getElementById('qr-id').value = qr.id; document.getElementById('new-qr-shortcut').value = qr.shortcut; document.getElementById('new-qr-msg').value = qr.message;
-        document.getElementById('qr-save-btn').innerText = "Update Reply"; document.getElementById('qr-cancel-btn').style.display = "block";
-    }
-    function resetQRForm() {
-        document.getElementById('qr-id').value = ""; document.getElementById('new-qr-shortcut').value = ""; document.getElementById('new-qr-msg').value = "";
-        document.getElementById('qr-save-btn').innerText = "Add Reply"; document.getElementById('qr-cancel-btn').style.display = "none";
-    }
-    async function saveQuickReply() {
-        const id = document.getElementById('qr-id').value; const shortcut = document.getElementById('new-qr-shortcut').value; const msg = document.getElementById('new-qr-msg').value;
-        if (!shortcut || !msg) return alert("Fill all fields");
-        let method = 'POST'; let url = '/quick_replies';
-        if (id) { method = 'PUT'; url = `/quick_replies/${id}`; }
-        const resp = await fetch(url, { method: method, headers: {'Content-Type':'application/json'}, body: JSON.stringify({shortcut, message: msg})});
-        if(resp.ok) { resetQRForm(); await loadQuickReplies(); renderManageQRList(); } else { alert("Error saving reply"); }
-    }
-    async function deleteQuickReply(id) { if(!confirm("Delete this reply?")) return; await fetch(`/quick_replies/${id}`, {method:'DELETE'}); await loadQuickReplies(); renderManageQRList(); }
+    async function loadQuickReplies() { try { const r=await fetch('/quick_replies'); quickReplies=await r.json(); } catch(e){} }
+    function toggleQuickReplies() { const m=document.getElementById('quick-reply-menu'); if(m.style.display==='flex') m.style.display='none'; else { renderQuickReplyMenu(); m.style.display='flex'; } }
+    function renderQuickReplyMenu() { const l=document.getElementById('qr-list-content'); l.innerHTML = ''; if(quickReplies.length===0) l.innerHTML='No replies.'; quickReplies.forEach(qr=>{ const d=document.createElement('div'); d.className='qr-item'; d.innerHTML=`<strong>/${qr.shortcut}</strong> ${qr.message.substring(0,40)}...`; d.onclick=()=>insertQuickReply(qr.message); l.appendChild(d); }); }
+    function showSlashPopup(q) { const p=document.getElementById('slash-popup'); const f=quickReplies.filter(qr=>qr.shortcut.toLowerCase().includes(q.toLowerCase())); if(f.length===0){p.style.display='none';return;} p.innerHTML=''; f.forEach(qr=>{ const d=document.createElement('div'); d.className='slash-item'; d.innerHTML=`<span class="slash-shortcut">/${qr.shortcut}</span> ${qr.message.substring(0,50)}`; d.onclick=()=>{ const v=msgInput.value; msgInput.value=v.substring(0,v.lastIndexOf('/'))+qr.message; p.style.display='none'; msgInput.focus(); checkInput(); }; p.appendChild(d); }); p.style.display='block'; }
+    function insertQuickReply(m) { msgInput.value=m; msgInput.focus(); checkInput(); document.getElementById('quick-reply-menu').style.display='none'; }
+    function openManageQRModal() { document.getElementById('quick-reply-menu').style.display='none'; document.getElementById('manage-qr-modal').style.display='grid'; resetQRForm(); renderManageQRList(); }
+    function renderManageQRList() { const l=document.getElementById('qr-manage-list'); l.innerHTML=''; quickReplies.forEach(qr=>{ const d=document.createElement('div'); d.className='qr-row'; const m=qr.message.replace(/\n/g,'<br>'); d.innerHTML=`<div style="flex:1;"><span style="color:var(--accent); font-weight:bold;">/${qr.shortcut}</span><div style="font-size:13px; margin-top:2px;">${displayMsg}</div></div><div style="display:flex; gap:10px; align-items:center;"><span class="material-icons" style="color:#53bdeb; cursor:pointer;" onclick="startEditQR(${qr.id})">edit</span><span class="material-icons" style="color:#ff4444; cursor:pointer;" onclick="deleteQuickReply(${qr.id})">delete</span></div>`; l.appendChild(d); }); }
+    function startEditQR(id) { const qr=quickReplies.find(q=>q.id===id); if(!qr)return; document.getElementById('qr-id').value=qr.id; document.getElementById('new-qr-shortcut').value=qr.shortcut; document.getElementById('new-qr-msg').value=qr.message; document.getElementById('qr-save-btn').innerText="Update"; document.getElementById('qr-cancel-btn').style.display="block"; }
+    function resetQRForm() { document.getElementById('qr-id').value=""; document.getElementById('new-qr-shortcut').value=""; document.getElementById('new-qr-msg').value=""; document.getElementById('qr-save-btn').innerText="Add"; document.getElementById('qr-cancel-btn').style.display="none"; }
+    async function saveQuickReply() { const id=document.getElementById('qr-id').value; const sc=document.getElementById('new-qr-shortcut').value; const msg=document.getElementById('new-qr-msg').value; if(!sc||!msg)return alert("Fill fields"); let m='POST', u='/quick_replies'; if(id){m='PUT'; u=`/quick_replies/${id}`;} const r=await fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify({shortcut:sc, message:msg})}); if(r.ok){resetQRForm(); await loadQuickReplies(); renderManageQRList();}else{alert("Error");} }
+    async function deleteQuickReply(id) { if(!confirm("Delete?"))return; await fetch(`/quick_replies/${id}`,{method:'DELETE'}); await loadQuickReplies(); renderManageQRList(); }
 
     // --- TEMPLATES ---
-    async function openTemplateModal() {
-        document.getElementById('template-modal').style.display = 'grid';
-        const list = document.getElementById('template-list'); list.innerHTML = '<div style="text-align:center;">Loading...</div>';
-        try { const resp = await fetch('/get_templates'); const data = await resp.json(); if (data.data) { allTemplates = data.data; renderTemplates(allTemplates); } else { list.innerHTML = '<div style="color:red;">Error fetching templates</div>'; } } catch(e) { list.innerHTML = '<div style="color:red;">Network Error</div>'; }
-    }
-    function renderTemplates(templates) {
-        const list = document.getElementById('template-list'); list.innerHTML = '';
-        templates.forEach(t => {
-            const div = document.createElement('div'); div.className = 'template-item';
-            const fullContent = getTemplateFullContent(t);
-            const displayText = fullContent.replace(/\n/g, '<br>');
-            div.innerHTML = `<div class="template-name">${t.name} <span style="font-weight:normal; font-size:10px; color:#aaa">(${t.language})</span></div><div class="template-body">${displayText}</div>`;
-            const safeContent = fullContent.replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n');
-            div.onclick = function() { sendTemplate(t.name, t.language, fullContent); };
-            list.appendChild(div);
-        });
-    }
-    function getTemplateFullContent(template) {
-        let text = "";
-        const header = template.components.find(c => c.type === 'HEADER'); if (header && header.format === 'TEXT') { text += `*${header.text}*\n\n`; }
-        const body = template.components.find(c => c.type === 'BODY'); if (body) text += body.text;
-        const footer = template.components.find(c => c.type === 'FOOTER'); if (footer) { text += `\n\n_${footer.text}_`; }
-        const buttons = template.components.find(c => c.type === 'BUTTONS');
-        if (buttons && buttons.buttons) { text += "\n\n"; buttons.buttons.forEach(b => { if (b.type === 'QUICK_REPLY') { text += `[ ↩️ ${b.text} ]  `; } else if (b.type === 'URL') { text += `[ 🔗 ${b.text} ]  `; } else if (b.type === 'PHONE_NUMBER') { text += `[ 📞 ${b.text} ]  `; } }); }
-        return text;
-    }
-    function filterTemplates() { const q = document.getElementById('template-search').value.toLowerCase(); renderTemplates(allTemplates.filter(t => t.name.toLowerCase().includes(q))); }
-    async function sendTemplate(name, lang, fullText) {
-        if(!confirm(`Send template "${name}"?`)) return;
-        closeModal('template-modal');
-        if (refreshTimer) clearInterval(refreshTimer); isSending = true;
-        const formattedText = fullText.replace(/\n/g, '<br>');
-        document.getElementById('messages').insertAdjacentHTML('beforeend', `<div class="msg sent">${formattedText} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`);
-        const container = document.getElementById('messages'); container.scrollTop = container.scrollHeight;
-        try { await fetch('/send_template', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({phone: currentPhone, template_name: name, language: lang, template_body: fullText }) }); } catch(e) { alert("Failed to send"); }
-        setTimeout(() => { isSending = false; refreshChat(false); refreshTimer = setInterval(refreshChat, 3000); }, 2000);
-    }
+    async function openTemplateModal() { document.getElementById('template-modal').style.display='grid'; const l=document.getElementById('template-list'); l.innerHTML='Loading...'; try{ const r=await fetch('/get_templates'); const d=await r.json(); if(d.data){allTemplates=d.data; renderTemplates(allTemplates);}else{l.innerHTML='Error';}}catch(e){l.innerHTML='Error';} }
+    function renderTemplates(ts) { const l=document.getElementById('template-list'); l.innerHTML=''; ts.forEach(t=>{ const d=document.createElement('div'); d.className='template-item'; const c=getTemplateFullContent(t); const displayText=c.replace(/\n/g,'<br>'); div.innerHTML=`<div class="template-name">${t.name}</div><div class="template-body">${displayText}</div>`; const safeContent=c.replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,'\\n'); d.setAttribute('onclick', `sendTemplate('${t.name}', '${t.language}', '${safeContent}')`); l.appendChild(d); }); }
+    function getTemplateFullContent(t) { let txt=""; const h=t.components.find(c=>c.type==='HEADER'); if(h&&h.format==='TEXT')txt+=`*${h.text}*\n\n`; const b=t.components.find(c=>c.type==='BODY'); if(b)txt+=b.text; const f=t.components.find(c=>c.type==='FOOTER'); if(f)txt+=`\n\n_${f.text}_`; const btns=t.components.find(c=>c.type==='BUTTONS'); if(btns&&btns.buttons){txt+="\n\n";btns.buttons.forEach(b=>{if(b.type==='QUICK_REPLY')txt+=`[↩️ ${b.text}] `;else txt+=`[🔗 ${b.text}] `;});} return txt; }
+    function filterTemplates() { const q=document.getElementById('template-search').value.toLowerCase(); renderTemplates(allTemplates.filter(t=>t.name.toLowerCase().includes(q))); }
+    async function sendTemplate(n,l,c) { if(!confirm(`Send "${n}"?`))return; closeModal('template-modal'); if(chatHistoryTimer)clearInterval(chatHistoryTimer); isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`<div class="msg sent">${c.replace(/\n/g,'<br>')} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`); document.getElementById('messages').scrollTop=document.getElementById('messages').scrollHeight; try{await fetch('/send_template',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:currentPhone,template_name:n,language:l,template_body:c})});}catch(e){alert("Failed");} setTimeout(()=>{isSending=false;refreshChat(false);chatHistoryTimer=setInterval(refreshChat,3000);},2000); }
 
-    // --- UTILS ---
-    function getAvatarColor(key) { if(!key) return '#607D8B'; const colors = ['#F44336', '#E91E63', '#9C27B0', '#673AB7', '#3F51B5', '#2196F3', '#009688', '#4CAF50', '#FF9800', '#FF5722', '#795548', '#607D8B']; let hash = 0; for (let i = 0; i < key.length; i++) hash = key.charCodeAt(i) + ((hash << 5) - hash); return colors[Math.abs(hash) % colors.length]; }
-    function getInitials(name) { if (!name) return "?"; const parts = name.trim().split(" "); if (parts.length >= 2) return (parts[0][0] + parts[parts.length-1][0]).toUpperCase(); return parts[0][0].toUpperCase(); }
-    function getTickHtml(status) { if (!status) return ''; let icon = 'done'; let className = 'sent'; if (status === 'delivered') { icon = 'done_all'; className = 'delivered'; } else if (status === 'read') { icon = 'done_all'; className = 'read'; } return `<span class="material-icons tick ${className}">${icon}</span>`; }
-    function linkify(text) { if (!text) return ""; let formatted = text.replace(/\n/g, '<br>'); const phoneRegex = /(?:\+|00|0)(?:92|3)\d{9,13}/g; return formatted.replace(phoneRegex, (match) => `<span class="phone-link" onclick="handleLinkClick('${match}')">${match}</span>`); }
-    function handleLinkClick(number) { let cleanNumber = number.replace(/\D/g, ''); openChat(cleanNumber, null); }
-    async function loadMyProfile() { try { const resp = await fetch('/me'); if(resp.ok) { const data = await resp.json(); const avatar = document.getElementById('my-avatar'); avatar.style.backgroundColor = getAvatarColor(data.username); avatar.innerText = getInitials(data.username); } } catch(e) {} }
-    function checkInput() { const val = msgInput.value.trim(); const isExpired = msgInput.disabled; if (isExpired) return; document.getElementById('send-btn').style.display = val ? 'block' : 'none'; document.getElementById('mic-btn').style.display = val ? 'none' : 'block'; }
-    function setFilter(type, el) { currentFilter = type; document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active')); el.classList.add('active'); renderChatList(); }
-    function filterChats(query) {
-            const q = query.toLowerCase().trim();
-
-            document.querySelectorAll('.chat-item').forEach(item => {
-                // Get Name text
-                const name = item.querySelector('.chat-name').innerText.toLowerCase();
-                // Get Phone from the data attribute we added above
-                const phone = (item.dataset.phone || "").toLowerCase();
-
-                // Show if Name OR Phone matches
-                if (name.includes(q) || phone.includes(q)) {
-                    item.style.display = 'flex';
-                } else {
-                    item.style.display = 'none';
-                }
-            });
-        }
-    function showNewChatModal() { document.getElementById('new-chat-modal').style.display = 'grid'; }
-    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-    async function startNewChat() { const phone = document.getElementById('new-phone').value.replace(/\D/g,''); if (phone.length < 7) return alert("Invalid"); await fetch('/create_contact', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})}); closeModal('new-chat-modal'); loadChats(); setTimeout(() => openChat(phone, null), 500); }
-    function updateSessionTimer() { const timerEl = document.getElementById('session-timer'); const inputEl = document.getElementById('msg-input'); const sendBtn = document.getElementById('send-btn'); if (!lastUserMsgTime) { timerEl.innerText = "--"; inputEl.disabled = true; inputEl.placeholder = "24h session expired"; return; } const remainingMs = (24 * 60 * 60 * 1000) - (new Date() - lastUserMsgTime); if (remainingMs > 0) { const hours = Math.floor(remainingMs / (1000 * 60 * 60)); const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60)); timerEl.innerText = `${hours}:${mins < 10 ? '0'+mins : mins}`; timerEl.classList.remove('session-expired'); inputEl.disabled = false; inputEl.placeholder = "Type a message"; } else { timerEl.innerText = "00:00"; timerEl.classList.add('session-expired'); inputEl.disabled = true; inputEl.placeholder = "24h session expired. Send a template."; sendBtn.style.display = 'none'; } }
-    setInterval(updateSessionTimer, 6000);
+    // --- UTILS (OTHER) ---
+    function setFilter(t,e) { currentFilter=t; document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active')); e.classList.add('active'); renderChatList(); }
+    function filterChats(q) { const l=q.toLowerCase(); document.querySelectorAll('.chat-item').forEach(i=>{ const n=i.querySelector('.chat-name').innerText.toLowerCase(); const p=i.dataset.phone||""; i.style.display=(n.includes(l)||p.includes(l))?'flex':'none'; }); }
+    function showNewChatModal() { document.getElementById('new-chat-modal').style.display='grid'; }
+    function closeModal(id) { document.getElementById(id).style.display='none'; }
+    async function startNewChat() { const p=document.getElementById('new-phone').value.replace(/\D/g,''); if(p.length<7)return alert("Invalid"); await fetch('/create_contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:p})}); closeModal('new-chat-modal'); await loadChats(); setTimeout(()=>openChat(p,null),100); }
+    function updateSessionTimer() { const t=document.getElementById('session-timer'); const i=document.getElementById('msg-input'); if(!lastUserMsgTime){t.innerText="--";i.disabled=true;i.placeholder="24h session expired";return;} const r=(24*3600*1000)-(new Date()-lastUserMsgTime); if(r>0){ const h=Math.floor(r/3600000); const m=Math.floor((r%3600000)/60000); t.innerText=`${h}:${m<10?'0'+m:m}`; t.classList.remove('session-expired'); i.disabled=false; i.placeholder="Type a message";}else{t.innerText="00:00";t.classList.add('session-expired');i.disabled=true;i.placeholder="Send a template.";} }
+    setInterval(updateSessionTimer, 60000);
 
     // --- FILE UPLOAD ---
     function toggleEmoji() { document.querySelector('emoji-picker').style.display = document.querySelector('emoji-picker').style.display === 'flex' ? 'none' : 'flex'; }
     function toggleAttach() { document.getElementById('attach-menu').style.display = document.getElementById('attach-menu').style.display === 'flex' ? 'none' : 'flex'; }
-    function triggerUpload(type) { toggleAttach(); const input = document.getElementById('hidden-file-input'); input.accept = type === 'image' ? 'image/*,video/*' : '*/*'; input.onchange = (e) => prepareUpload(e.target.files[0], type); input.click(); }
-    function prepareUpload(file, type) { if(!file || !currentPhone) return; pendingFile = file; if (file.type.startsWith('video')) pendingFileType = 'video'; else if (file.type.startsWith('image')) pendingFileType = 'image'; else pendingFileType = 'document'; const previewContainer = document.getElementById('preview-container'); previewContainer.innerHTML = ''; document.getElementById('preview-filename').innerText = file.name; document.getElementById('file-caption').value = ''; if(pendingFileType === 'image') { const img = document.createElement('img'); img.id = 'preview-img'; img.src = URL.createObjectURL(file); previewContainer.appendChild(img); } else if (pendingFileType === 'video') { const vid = document.createElement('video'); vid.id = 'preview-video'; vid.controls = true; vid.src = URL.createObjectURL(file); previewContainer.appendChild(vid); } else { previewContainer.innerHTML = `<span class="material-icons" style="font-size:48px; color:#fff; padding:20px;">description</span>`; } document.getElementById('preview-modal').style.display = 'grid'; }
-    function cancelUpload() { document.getElementById('preview-modal').style.display = 'none'; pendingFile = null; document.getElementById('hidden-file-input').value = ""; }
-    async function confirmUpload() { if(!pendingFile) return; const caption = document.getElementById('file-caption').value; const formData = new FormData(); formData.append('phone', currentPhone); formData.append('file', pendingFile); formData.append('type', pendingFileType); formData.append('caption', caption); document.getElementById('preview-modal').style.display = 'none'; isSending = true; document.getElementById('messages').insertAdjacentHTML('beforeend', `<div class="msg sent" style="color:#aaa;">⏳ Uploading ${pendingFileType}...</div>`); await fetch('/send_attachment', {method: 'POST', body: formData}); pendingFile = null; document.getElementById('hidden-file-input').value = ""; setTimeout(() => { isSending = false; refreshChat(true); }, 2000); }
+    function triggerUpload(t) { toggleAttach(); const input = document.getElementById('hidden-file-input'); input.accept = t==='image'?'image/*,video/*':'*/*'; input.onchange = (e) => prepareUpload(e.target.files[0],t); input.click(); }
+    function prepareUpload(f,t) { if(!f||!currentPhone)return; pendingFile=f; if(f.type.startsWith('video'))pendingFileType='video';else if(f.type.startsWith('image'))pendingFileType='image';else pendingFileType='document'; const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=''; if(pendingFileType==='image'){const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img);}else if(pendingFileType==='video'){const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v);}else{c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`;} document.getElementById('preview-modal').style.display='grid'; }
+    function cancelUpload() { document.getElementById('preview-modal').style.display='none'; pendingFile=null; document.getElementById('hidden-file-input').value=""; }
+    async function confirmUpload() { if(!pendingFile)return; const cap=document.getElementById('file-caption').value; const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',pendingFile); fd.append('type',pendingFileType); fd.append('caption',cap); document.getElementById('preview-modal').style.display='none'; isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Uploading...`); await fetch('/send_attachment',{method:'POST',body:fd}); pendingFile=null; document.getElementById('hidden-file-input').value=""; setTimeout(()=>{isSending=false;refreshChat(true);},2000); }
 
     // --- VOICE ---
-    async function startRecording() { if (!navigator.mediaDevices) return alert("Mic error"); const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); mediaRecorder = new MediaRecorder(stream); audioChunks = []; mediaRecorder.ondataavailable = e => audioChunks.push(e.data); mediaRecorder.start(); document.getElementById('mic-btn').style.display = 'none'; document.getElementById('msg-input').style.display = 'none'; document.getElementById('recording-ui').style.display = 'flex'; recStartTime = Date.now(); recTimerInt = setInterval(() => { const diff = Math.floor((Date.now() - recStartTime)/1000); const m = Math.floor(diff/60); const s = diff % 60; document.getElementById('rec-timer').innerText = `${m}:${s < 10 ? '0'+s : s}`; }, 1000); }
-    async function stopRecording(send) { if (!mediaRecorder) return; mediaRecorder.onstop = async () => { clearInterval(recTimerInt); document.getElementById('recording-ui').style.display = 'none'; document.getElementById('mic-btn').style.display = 'block'; document.getElementById('msg-input').style.display = 'block'; if (send) { const audioBlob = new Blob(audioChunks, { type: 'audio/ogg; codecs=opus' }); const formData = new FormData(); formData.append('phone', currentPhone); formData.append('file', audioBlob, 'voice.ogg'); formData.append('type', 'audio'); isSending = true; document.getElementById('messages').insertAdjacentHTML('beforeend', `<div class="msg sent">🎤 Sending voice...</div>`); await fetch('/send_attachment', {method: 'POST', body: formData}); setTimeout(() => { isSending = false; refreshChat(true); }, 1500); } }; mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(track => track.stop()); }
-    // --- IMAGE VIEWER LOGIC ---
-        function openImageViewer(src) {
-            const viewer = document.getElementById('image-viewer');
-            const fullImg = document.getElementById('full-image');
-            fullImg.src = src;
-            viewer.style.display = "flex"; // Flex centers it perfectly
-            viewer.style.justifyContent = "center";
-            viewer.style.alignItems = "center";
-        }
+    async function startRecording() { if (!navigator.mediaDevices) return alert("Mic error"); const s=await navigator.mediaDevices.getUserMedia({audio:true}); mediaRecorder=new MediaRecorder(s); audioChunks=[]; mediaRecorder.ondataavailable=e=>audioChunks.push(e.data); mediaRecorder.start(); document.getElementById('mic-btn').style.display='none'; document.getElementById('msg-input').style.display='none'; document.getElementById('recording-ui').style.display='flex'; recStartTime=Date.now(); recTimerInt=setInterval(()=>{const d=Math.floor((Date.now()-recStartTime)/1000);const m=Math.floor(d/60);const s=d%60;document.getElementById('rec-timer').innerText=`${m}:${s<10?'0'+s:s}`;},1000); }
+    async function stopRecording(send) { if(!mediaRecorder)return; mediaRecorder.onstop=async()=>{clearInterval(recTimerInt); document.getElementById('recording-ui').style.display='none'; document.getElementById('mic-btn').style.display='block'; document.getElementById('msg-input').style.display='block'; if(send){const b=new Blob(audioChunks,{type:'audio/ogg; codecs=opus'}); const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',b,'voice.ogg'); fd.append('type','audio'); isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Sending voice...`); await fetch('/send_attachment',{method:'POST',body:fd}); setTimeout(()=>{isSending=false;refreshChat(true);},1500);}}; mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(t=>t.stop()); }
 
-        function closeImageViewer() {
-            document.getElementById('image-viewer').style.display = "none";
-        }
-
+    // --- CONTEXT MENU & IMAGE VIEWER ---
+    let contextMenuPhone=null;
+    function showContextMenu(e,p) { e.preventDefault(); const m=document.getElementById('context-menu'); m.style.display='block'; m.style.left=e.pageX+'px'; m.style.top=e.pageY+'px'; contextMenuPhone=p; }
+    window.addEventListener('click',()=>{document.getElementById('context-menu').style.display='none';});
+    async function markChatUnread() { if(!contextMenuPhone)return; const r=await fetch('/mark_unread',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:contextMenuPhone})}); if(r.ok){const i=document.getElementById(`chat-item-${contextMenuPhone}`); if(i){let b=i.querySelector('.unread-badge'); if(!b){b=document.createElement('div');b.className='unread-badge';b.innerText='1';i.querySelectorAll('.chat-top')[1].appendChild(b);}const d=allChats.find(c=>c.phone===contextMenuPhone); if(d)d.unread_count=1;}}}
+    function openImageViewer(src) { const v=document.getElementById('image-viewer'); const i=document.getElementById('full-image'); i.src=src; v.style.display='flex'; }
+    function closeImageViewer() { document.getElementById('image-viewer').style.display='none'; }
 </script>
 </body>
 </html>
