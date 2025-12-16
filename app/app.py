@@ -407,6 +407,8 @@ def send_text():
         "type": "text",
         "text": {"body": text}
     }
+    print("USING TOKEN:", WHATSAPP_TOKEN[:10])
+
 
     try:
         resp = requests.post(url, json=payload, headers=headers)
@@ -1201,7 +1203,15 @@ def setup_whatsapp_business(access_token):
         requests.post(sub_url, headers=headers)
 
         # 5. Save to Database
-        save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
+#        save_whatsapp_account(waba_id, phone_number_id, display_phone, access_token)
+        system_token = os.getenv("WA_SYSTEM_TOKEN")
+
+        save_whatsapp_account(
+            waba_id,
+            phone_number_id,
+            display_phone,
+            system_token
+        )
 
         return redirect("/inbox")
 
@@ -1209,6 +1219,7 @@ def setup_whatsapp_business(access_token):
         traceback.print_exc()
         return f"Setup Logic Failed: {str(e)}", 500
 
+'''
 @app.route("/whatsapp/fetch-assets")
 def fetch_assets():
     token = session["fb_token"]
@@ -1238,6 +1249,7 @@ def fetch_assets():
     #save_to_db(waba_id, phone_number_id, token)
 
     return redirect("/inbox")
+'''
 
 def save_whatsapp_account(waba_id, phone_number_id, display_phone, token):
     conn = get_conn()
