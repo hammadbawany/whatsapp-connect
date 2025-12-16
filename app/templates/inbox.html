@@ -352,7 +352,7 @@
     loadChats(); loadMyProfile(); loadQuickReplies();
 //1.    setInterval(() => loadChats(), 4000); // Poll chat list
 
-    setInterval(() => loadChats(), 400000); // Poll chat list
+    setInterval(() => loadChats(), 4000); // Poll chat list
     // INPUT LISTENERS
     const msgInput = document.getElementById('msg-input');
     msgInput.addEventListener('input', function(e) {
@@ -469,7 +469,7 @@
         fetch('/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})});
 
         if (refreshTimer) clearInterval(refreshTimer);
-        refreshTimer = setInterval(refreshChat, 300000);
+        refreshTimer = setInterval(refreshChat, 3000);
         //refreshTimer = setInterval(refreshChat, 3000);
 
         await refreshChat(true);
@@ -578,7 +578,7 @@
                 refreshChat(false); // Silent update to get real status
 
                 // Restart the polling loop
-                refreshTimer = setInterval(refreshChat, 300000);
+                refreshTimer = setInterval(refreshChat, 3000);
 
 //                refreshTimer = setInterval(refreshChat, 3000);
             }, 1500);
@@ -733,7 +733,7 @@
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
     async function startNewChat() { const phone = document.getElementById('new-phone').value.replace(/\D/g,''); if (phone.length < 7) return alert("Invalid"); await fetch('/create_contact', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})}); closeModal('new-chat-modal'); loadChats(); setTimeout(() => openChat(phone, null), 500); }
     function updateSessionTimer() { const timerEl = document.getElementById('session-timer'); const inputEl = document.getElementById('msg-input'); const sendBtn = document.getElementById('send-btn'); if (!lastUserMsgTime) { timerEl.innerText = "--"; inputEl.disabled = true; inputEl.placeholder = "24h session expired"; return; } const remainingMs = (24 * 60 * 60 * 1000) - (new Date() - lastUserMsgTime); if (remainingMs > 0) { const hours = Math.floor(remainingMs / (1000 * 60 * 60)); const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60)); timerEl.innerText = `${hours}:${mins < 10 ? '0'+mins : mins}`; timerEl.classList.remove('session-expired'); inputEl.disabled = false; inputEl.placeholder = "Type a message"; } else { timerEl.innerText = "00:00"; timerEl.classList.add('session-expired'); inputEl.disabled = true; inputEl.placeholder = "24h session expired. Send a template."; sendBtn.style.display = 'none'; } }
-    setInterval(updateSessionTimer, 60000);
+    setInterval(updateSessionTimer, 6000);
 
     // --- FILE UPLOAD ---
     function toggleEmoji() { document.querySelector('emoji-picker').style.display = document.querySelector('emoji-picker').style.display === 'flex' ? 'none' : 'flex'; }
