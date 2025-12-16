@@ -14,6 +14,7 @@ from db import get_conn  # assumes db.get_conn exists and DATABASE_URL set
 import tempfile
 from flask import Response
 import traceback
+TARGET_WABA_ID = "707727951897342"
 
 
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
@@ -31,21 +32,22 @@ WABA_ID = os.getenv("WA_WABA_ID")
 
 def get_active_account_id():
     """
-    Returns the ID of the latest connected WhatsApp account.
+    Forces the app to use ONLY the specific WABA ID defined above.
     """
     conn = get_conn()
-    #print("get_active_account_id")
-    # 🟢 FIX: Explicitly use RealDictCursor so we get a Dictionary
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+    # 🟢 FORCE SELECTION OF SPECIFIC WABA
+    cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
     row = cur.fetchone()
 
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
-    # 🟢 FIX: Access by Name ['id'], because row[0] causes KeyError in DictCursor
-    return row['id'] if row else None
+    if not row:
+        print(f"❌ CRITICAL: WABA ID {TARGET_WABA_ID} not found in DB!")
+        return None
+
+    return row['id']
 
 
 
@@ -315,11 +317,15 @@ def webhook():
                 whatsapp_account_id = row['id']
                 print(f"✅ Exact Match: ID {whatsapp_account_id}", file=sys.stdout)
 
+    # 2. 🟢 HARDCODED FALLBACK: Force to TARGET_WABA_ID if exact match fails
         if not whatsapp_account_id:
-            print("⚠️ Mismatch! Using Fallback to Latest Account.", file=sys.stdout)
-            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            print(f"⚠️ Mismatch! Forcing assignment to WABA {TARGET_WABA_ID}", file=sys.stdout)
+            cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
             fallback = cur.fetchone()
-            if fallback: whatsapp_account_id = fallback['id']
+            if fallback:
+                whatsapp_account_id = fallback['id']
+            else:
+                print("❌ CRITICAL: Targeted WABA not found in DB", file=sys.stdout)
 
         # 4. CAPTURE NAME
         contacts_data = value.get("contacts", [])
@@ -523,7 +529,7 @@ def history():
 
     return jsonify(results)
 
-
+'''
 @app.route("/send_text", methods=["POST"])
 def send_text():
     data = request.json
@@ -560,6 +566,35 @@ def send_text():
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close(); conn.close()
+'''
+
+@app.route("/send_text", methods=["POST"])
+def send_text():
+    data = request.json
+    phone = data.get("phone"); text = data.get("text")
+
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # 🟢 HARDCODED: Get specific account
+    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    acc = cur.fetchone()
+
+    if not acc:
+        cur.close(); conn.close()
+        return jsonify({"error": f"WABA {TARGET_WABA_ID} not connected"}), 400
+
+    # ... (Rest of function remains exactly the same) ...
+    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+    headers = {"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}
+    try:
+        resp = requests.post(url, json={"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": text}}, headers=headers).json()
+        wa_id = resp.get("messages", [{}])[0].get("id")
+        cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp) VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())", (acc['id'], phone, text, wa_id))
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/send_media", methods=["POST"])
@@ -1078,7 +1113,7 @@ def me():
         "id": user["id"] if user else 0
     })
 
-
+'''
 @app.route("/get_templates")
 @login_required
 def get_templates():
@@ -1099,6 +1134,17 @@ def get_templates():
     except Exception as e:
         print("Template Fetch Error:", e)
         return jsonify({"error": str(e)}), 500
+'''
+
+@app.route("/get_templates")
+@login_required
+def get_templates():
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+    # 🟢 HARDCODED
+    cur.execute("SELECT waba_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    acc = cur.fetchone(); cur.close(); conn.close()
+    if not acc: return jsonify({"error": "No account"}), 400
+    return jsonify(requests.get(f"https://graph.facebook.com/v20.0/{acc['waba_id']}/message_templates?status=APPROVED&limit=100", headers={"Authorization": f"Bearer {acc['access_token']}"}).json())
 
 # ==========================================
 # 🟢 NEW: SEND TEMPLATE MESSAGE
