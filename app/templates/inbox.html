@@ -8,6 +8,20 @@
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
     /* 🟢 UPDATED: SMALLER IMAGES */
+
+    .template-body {
+    font-size: 12px;
+    color: var(--secondary-text);
+    margin-top: 5px;
+
+    /* Limits text to exactly 4 lines */
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4; /* Improves readability */
+}
 .chat-media {
     max-width: 200px;        /* Limits width */
     max-height: 200px;       /* Limits height (for tall images) */
