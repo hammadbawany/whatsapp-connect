@@ -397,7 +397,9 @@
         fetch('/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})});
 
         if (refreshTimer) clearInterval(refreshTimer);
-        refreshTimer = setInterval(refreshChat, 3000);
+        refreshTimer = setInterval(refreshChat, 300000);
+        //refreshTimer = setInterval(refreshChat, 3000);
+
         await refreshChat(true);
     }
 
@@ -505,7 +507,9 @@
                 refreshChat(false); // Silent update to get real status
 
                 // Restart the polling loop
-                refreshTimer = setInterval(refreshChat, 3000);
+                refreshTimer = setInterval(refreshChat, 300000);
+
+//                refreshTimer = setInterval(refreshChat, 3000);
             }, 1500);
         }
 
