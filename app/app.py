@@ -74,6 +74,7 @@ def webhook():
         changes = entry[0].get("changes", [])
         if not changes:
             return "OK", 200
+        value = changes[0].get("value", {})
 
         # -------------------------------------------------
         # 🆕 IDENTIFY WHICH WHATSAPP NUMBER THIS EVENT IS FOR
@@ -163,18 +164,27 @@ def webhook():
                     if phone and media_id:
                         cur.execute("""
                             INSERT INTO messages (
-                                user_phone, sender, media_type, media_id, message, whatsapp_id, status
+                                whatsapp_account_id,
+                                user_phone,
+                                sender,
+                                media_type,
+                                media_id,
+                                message,
+                                whatsapp_id,
+                                status
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """, (
+                            whatsapp_account_id,
                             phone,
                             "customer",
-                            msg_type,  # Saves 'image', 'video', 'document', etc.
+                            msg_type,
                             media_id,
-                            caption,   # Saves caption if it exists
+                            caption,
                             wa_id,
                             "received"
                         ))
+
 
                 # --- UNKNOWN ---
                 else:
