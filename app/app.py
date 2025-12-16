@@ -366,16 +366,32 @@ def webhook():
                         VALUES (%s, %s, 'customer', %s, %s, %s, %s, 'received', NOW())
                     """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption",""), wa_id))
 
-                # Interactive (Buttons/Quick Replies)
                 elif msg_type == "interactive":
                     interactive = msg.get("interactive", {})
                     i_type = interactive.get("type")
+
+                    # 🔍 LOGGING: See exactly what the button click contains
+                    print(f"🔹 [WEBHOOK] Interactive Type: {i_type}", file=sys.stdout)
+                    print(f"🔹 [WEBHOOK] Full Payload: {interactive}", file=sys.stdout)
+
                     resp = ""
-                    if i_type == "button_reply": resp = interactive.get("button_reply", {}).get("title")
-                    elif i_type == "list_reply": resp = interactive.get("list_reply", {}).get("title")
+                    if i_type == "button_reply":
+                        resp = interactive.get("button_reply", {}).get("title")
+                    elif i_type == "list_reply":
+                        resp = interactive.get("list_reply", {}).get("title")
+                    else:
+                        # Handle unknown types (like nfm_reply) so they don't vanish
+                        resp = f"[{i_type}]"
 
                     if resp:
-                        print(f"webhook inset interactive:")
+                        # 🟢 FORCE ID CHECK
+                        if not whatsapp_account_id:
+                            print("⚠️ [WEBHOOK] No Account ID. Fetching fallback...", file=sys.stdout)
+                            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+                            fb_row = cur.fetchone()
+                            if fb_row: whatsapp_account_id = fb_row['id']
+
+                        print(f"✅ [WEBHOOK] Saving Interactive Msg: '{resp}' for Acc ID: {whatsapp_account_id}", file=sys.stdout)
 
                         cur.execute("""
                             INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
