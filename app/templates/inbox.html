@@ -7,6 +7,18 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    /* 🟢 UPDATED: SMALLER IMAGES */
+.chat-media {
+    max-width: 200px;        /* Limits width */
+    max-height: 200px;       /* Limits height (for tall images) */
+    width: auto;             /* Maintains aspect ratio */
+    height: auto;            /* Maintains aspect ratio */
+    object-fit: contain;     /* Ensures image isn't stretched/cropped */
+    border-radius: 6px;
+    margin-top: 5px;
+    cursor: pointer;         /* Shows hand icon on hover */
+    background-color: rgba(0,0,0,0.1); /* Subtle background while loading */
+}
         :root {
             --bg-color: #0c1317; --sidebar-bg: #111b21; --header-bg: #202c33;
             --border-color: #2a3942; --incoming-bg: #202c33; --outgoing-bg: #005c4b;
