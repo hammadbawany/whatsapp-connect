@@ -296,11 +296,24 @@ def typing():
 
 # ---------- API endpoints (list, history, send) ----------
 @app.route("/list_users")
+@login_required
 def list_users():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Logic: Get all Contacts, Find their Last Message, Count Unread, Get Tags
+    # 🔴 pick active whatsapp account (for now: latest connected)
+    cur.execute("""
+        SELECT id
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    account = cur.fetchone()
+    if not account:
+        return jsonify([])
+
+    account_id = account["id"]
+
     query = """
         WITH LastMsg AS (
             SELECT
@@ -308,6 +321,7 @@ def list_users():
                 MAX(timestamp) as last_ts,
                 COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
             FROM messages
+            WHERE whatsapp_account_id = %s
             GROUP BY user_phone
         )
         SELECT
@@ -318,70 +332,77 @@ def list_users():
             m.media_type,
             ct.tag
         FROM contacts c
-        LEFT JOIN LastMsg lm ON c.phone = lm.user_phone
-        LEFT JOIN messages m ON lm.user_phone = m.user_phone AND lm.last_ts = m.timestamp
+        JOIN LastMsg lm ON c.phone = lm.user_phone
+        LEFT JOIN messages m
+            ON m.user_phone = lm.user_phone
+           AND m.timestamp = lm.last_ts
+           AND m.whatsapp_account_id = %s
         LEFT JOIN contact_tags ct ON c.phone = ct.phone
-        ORDER BY lm.last_ts DESC NULLS FIRST
+        ORDER BY lm.last_ts DESC
     """
 
-    cur.execute(query)
+    cur.execute(query, (account_id, account_id))
     rows = cur.fetchall()
     cur.close(); conn.close()
 
-    # Fix timestamps for JSON
-    results = []
     for r in rows:
-        if r['last_ts']:
-            r['last_ts'] = r['last_ts'].isoformat()
-            if not r['last_ts'].endswith("Z"): r['last_ts'] += "Z"
-        results.append(r)
+        if r["last_ts"]:
+            r["last_ts"] = r["last_ts"].isoformat()
 
-    return jsonify(results)
+    return jsonify(rows)
 
 
 
 @app.route("/history")
+@login_required
 def history():
     phone = request.args.get("phone")
     if not phone:
         return jsonify([])
 
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute("""
-            SELECT
-                sender,
-                message,
-                media_type,
-                media_id,
-                status,
-                timestamp
-            FROM messages
-            WHERE user_phone = %s
-            ORDER BY timestamp ASC
-        """, (phone,))
+    cur.execute("""
+        SELECT id
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    account = cur.fetchone()
+    if not account:
+        return jsonify([])
 
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+    account_id = account["id"]
 
-        return jsonify([
-            {
-                "sender": r["sender"],
-                "message": r["message"],
-                "media_type": r["media_type"],
-                "media_id": r["media_id"],
-                "status": r["status"],
-                "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None
-            }
-            for r in rows
-        ])
+    cur.execute("""
+        SELECT
+            sender,
+            message,
+            media_type,
+            media_id,
+            status,
+            timestamp
+        FROM messages
+        WHERE user_phone = %s
+          AND whatsapp_account_id = %s
+        ORDER BY timestamp ASC
+    """, (phone, account_id))
 
-    except Exception as e:
-        print("HISTORY ERROR:", e)
-        return jsonify({"error": "history failed"}), 500
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+
+    return jsonify([
+        {
+            "sender": r["sender"],
+            "message": r["message"],
+            "media_type": r["media_type"],
+            "media_id": r["media_id"],
+            "status": r["status"],
+            "timestamp": r["timestamp"].isoformat() if r["timestamp"] else None
+        }
+        for r in rows
+    ])
 
 @app.route("/send_text", methods=["POST"])
 def send_text():
