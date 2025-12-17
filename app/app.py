@@ -644,19 +644,30 @@ def typing():
 @app.route("/list_users")
 @login_required
 def list_users():
-    account_id = get_active_account_id()
-    if not account_id: return jsonify([])
-
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # 🟢 FIX: Filter specifically by whatsapp_account_id
+    # 🟢 1. Get the Specific Account ID first
+    cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    row = cur.fetchone()
+
+    # Fallback
+    if not row:
+        cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+
+    if not row:
+        return jsonify([]) # No account connected
+
+    account_id = row['id']
+
+    # 🟢 2. Fetch Users associated with this Account ID
     query = """
         WITH LastMsg AS (
             SELECT
                 user_phone,
                 MAX(timestamp) as last_ts,
-                COUNT(CASE WHEN status = 'received' AND whatsapp_account_id = %s THEN 1 END) as unread_count
+                COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
             FROM messages
             WHERE whatsapp_account_id = %s
             GROUP BY user_phone
@@ -673,14 +684,15 @@ def list_users():
         LEFT JOIN messages m ON lm.user_phone = m.user_phone AND lm.last_ts = m.timestamp
         ORDER BY lm.last_ts DESC
     """
-    cur.execute(query, (account_id, account_id))
+
+    cur.execute(query, (account_id,))
     rows = cur.fetchall()
     cur.close(); conn.close()
 
     for r in rows:
         if r['last_ts']:
             r['last_ts'] = r['last_ts'].isoformat()
-            if not r['last_ts'].endswith("Z"): r['last_ts'] += "Z" # Timezone fix
+            if not r['last_ts'].endswith("Z"): r['last_ts'] += "Z"
 
     return jsonify(rows)
 
@@ -1174,102 +1186,90 @@ def download_whatsapp_media(media_id):
 @app.route("/send_attachment", methods=["POST"])
 def send_attachment():
     try:
-#        phone = request.form.get("phone")
+        # 🟢 1. Normalize Phone & Clean Input
         phone = normalize_phone(request.form.get("phone"))
-
         caption = request.form.get("caption", "")
         file = request.files.get("file")
-        # Default to image if not specified
         msg_type = request.form.get("type", "image")
 
         if not phone or not file:
             return jsonify({"error": "missing data"}), 400
 
+        # 🟢 2. Get Account
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 🟢 FIX: Use Hardcoded WABA ID
         cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
         acc = cur.fetchone()
-        cur.close(); conn.close()
+
+        # Fallback
+        if not acc:
+            cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            acc = cur.fetchone()
 
         if not acc:
-            print(f"❌ Send Attachment Failed: WABA {TARGET_WABA_ID} not found")
-            return jsonify({"error": "Account not connected"}), 400
+            cur.close(); conn.close()
+            return jsonify({"error": "No account"}), 400
 
-        # -------------------------------------------------
-        # 1. Upload to Meta
-        # -------------------------------------------------
+        # 🟢 3. PREPARE FILE & MIMETYPE
+        # Read file content into memory to ensure clean upload
+        file_content = file.read()
+
+        if msg_type == 'audio':
+            # Force OGG for voice notes (Meta requirement)
+            files = {"file": ("voice.ogg", file_content, "audio/ogg")}
+            caption = "" # 🔴 CRITICAL: Audio cannot have captions in WhatsApp API
+        else:
+            files = {"file": (file.filename, file_content, file.mimetype)}
+
+        # 4. Upload to Meta
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
-        headers = {"Authorization": f"Bearer {acc['access_token']}"}
-
-        # Prepare file payload
-        files = {"file": (file.filename, file.stream, file.mimetype)}
-        data_payload = {"messaging_product": "whatsapp"}
-
-        print(f"📤 Uploading {msg_type} to Meta...")
-        up_resp = requests.post(upload_url, headers=headers, files=files, data=data_payload).json()
+        up_resp = requests.post(
+            upload_url,
+            headers={"Authorization": f"Bearer {acc['access_token']}"},
+            files=files,
+            data={"messaging_product": "whatsapp"}
+        ).json()
 
         media_id = up_resp.get("id")
         if not media_id:
-            print("❌ Meta Upload Error:", up_resp)
+            print("❌ Upload Error:", up_resp)
             return jsonify(up_resp), 500
 
-        print(f"✅ Uploaded! Media ID: {media_id}")
-
-        # -------------------------------------------------
-        # 2. Send Message
-        # -------------------------------------------------
+        # 5. Send Message
         msg_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
-        json_headers = {
-            "Authorization": f"Bearer {acc['access_token']}",
-            "Content-Type": "application/json"
-        }
 
-        msg_payload = {
+        payload = {
             "messaging_product": "whatsapp",
             "to": phone,
             "type": msg_type,
             msg_type: {"id": media_id}
         }
 
-        # Add caption if allowed
+        # Only add caption for non-audio types
         if msg_type in ['image', 'video', 'document'] and caption:
-            msg_payload[msg_type]["caption"] = caption
+            payload[msg_type]["caption"] = caption
 
-        print(f"📤 Sending Message to {phone}...")
-        send_resp = requests.post(msg_url, json=msg_payload, headers=json_headers)
-        send_json = send_resp.json()
+        send_resp = requests.post(msg_url, json=payload, headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}).json()
 
-        # 🟢 CRITICAL CHECK: Did Meta accept it?
-        if send_resp.status_code != 200:
-            print("❌ Meta Send Error:", send_json)
-            return jsonify(send_json), send_resp.status_code
+        if "messages" not in send_resp:
+            print("❌ Send Failed:", send_resp)
+            return jsonify(send_resp), 400
 
-        wa_id = send_json.get("messages", [{}])[0].get("id")
+        wa_id = send_resp["messages"][0]["id"]
 
-        # -------------------------------------------------
-        # 3. Save to DB
-        # -------------------------------------------------
-        conn = get_conn(); cur = conn.cursor()
+        # 6. Save to DB
         cur.execute("""
-            INSERT INTO messages (
-                whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp
-            ) VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
+            INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+            VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
         """, (acc['id'], phone, msg_type, media_id, caption, wa_id))
 
         conn.commit(); cur.close(); conn.close()
-
-        print("✅ Message Sent & Saved!")
         return jsonify({"success": True})
 
     except Exception as e:
-        print("❌ Server Exception:", e)
+        print("❌ Attachment Exception:", e)
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
-
 # 3. Add Tag (For Filtering)
 @app.route("/set_tag", methods=["POST"])
 def set_tag():
@@ -1381,6 +1381,28 @@ def get_templates():
     if not acc: return jsonify({"error": "No account"}), 400
     return jsonify(requests.get(f"https://graph.facebook.com/v20.0/{acc['waba_id']}/message_templates?status=APPROVED&limit=100", headers={"Authorization": f"Bearer {acc['access_token']}"}).json())
 
+'''
+#new code from gemini
+@app.route("/get_templates")
+@login_required
+def get_templates():
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+    # Use Target WABA Logic
+    cur.execute("SELECT waba_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    acc = cur.fetchone()
+    # Fallback
+    if not acc:
+        cur.execute("SELECT waba_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+        acc = cur.fetchone()
+
+    if not acc: return jsonify({"error": "No account"}), 400
+
+    # Fetch templates
+    url = f"https://graph.facebook.com/v20.0/{acc['waba_id']}/message_templates?limit=100"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {acc['access_token']}"}).json()
+
+    return jsonify(resp)
+'''
 # ==========================================
 # 🟢 NEW: SEND TEMPLATE MESSAGE
 # ==========================================
@@ -1925,10 +1947,20 @@ def mark_unread():
 @app.route("/unread_counts")
 @login_required
 def unread_counts():
-    account_id = get_active_account_id()
-    if not account_id: return jsonify({})
+    # Reuse the logic to get the correct account ID
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    row = cur.fetchone()
+    if not row:
+        cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
 
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+    if not row:
+        cur.close(); conn.close()
+        return jsonify({})
+
+    account_id = row['id']
 
     cur.execute("""
         SELECT user_phone, COUNT(*) as unread
@@ -1940,7 +1972,5 @@ def unread_counts():
     rows = cur.fetchall()
     cur.close(); conn.close()
 
-    # Format into a simple {phone: count} dictionary
     counts = {r['user_phone']: r['unread'] for r in rows}
-
     return jsonify(counts)
