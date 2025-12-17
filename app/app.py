@@ -612,34 +612,23 @@ def history():
             m.media_id,
             m.status,
             m.timestamp,
+            m.whatsapp_id,
+            m.context_whatsapp_id,
 
-            -- 🟢 REPLY OBJECT (WhatsApp-style)
-            CASE
-                WHEN r.id IS NULL THEN NULL
-                ELSE json_build_object(
-                    'sender', r.sender,
-                    'sender_name',
-                        CASE
-                            WHEN r.sender = 'agent' THEN 'You'
-                            ELSE c.name
-                        END,
-                    'message', r.message,
-                    'media_type', r.media_type
-                )
-            END AS reply_to
+            -- reply message fields
+            r.sender        AS reply_sender,
+            r.message       AS reply_message,
+            r.media_type    AS reply_media_type,
+            r.media_id      AS reply_media_id,
+            r.whatsapp_id   AS reply_whatsapp_id
 
         FROM messages m
-
-        -- 🔗 JOIN replied-to message
         LEFT JOIN messages r
             ON m.context_whatsapp_id = r.whatsapp_id
 
-        -- 🔗 JOIN contact for NAME
-        LEFT JOIN contacts c
-            ON r.user_phone = c.phone
-
-        WHERE m.user_phone = %s
-          AND m.whatsapp_account_id = %s
+        WHERE
+            m.user_phone = %s
+            AND m.whatsapp_account_id = %s
 
         ORDER BY m.timestamp ASC
     """, (phone, account_id))
@@ -654,15 +643,26 @@ def history():
         if ts and not ts.endswith("Z"):
             ts += "Z"
 
-        results.append({
+        item = {
             "sender": r["sender"],
             "message": r["message"],
             "media_type": r["media_type"],
             "media_id": r["media_id"],
             "status": r["status"],
             "timestamp": ts,
-            "reply_to": r["reply_to"]
-        })
+            "whatsapp_id": r["whatsapp_id"]
+        }
+
+        if r["reply_whatsapp_id"]:
+            item["reply_to"] = {
+                "sender": r["reply_sender"],
+                "message": r["reply_message"],
+                "media_type": r["reply_media_type"],
+                "media_id": r["reply_media_id"],
+                "whatsapp_id": r["reply_whatsapp_id"]
+            }
+
+        results.append(item)
 
     return jsonify(results)
 
