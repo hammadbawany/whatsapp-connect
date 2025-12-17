@@ -7,6 +7,52 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    .reply-preview {
+    display: flex;
+    cursor: pointer;
+    margin-bottom: 4px;
+    }
+
+    .reply-bar {
+        width: 3px;
+        background: #25D366;
+        margin-right: 6px;
+        border-radius: 2px;
+    }
+
+    .reply-content {
+        font-size: 12px;
+        color: #8696a0;
+    }
+
+    .reply-author {
+        font-weight: 600;
+        color: #25D366;
+        margin-bottom: 2px;
+    }
+
+    .reply-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .reply-thumb {
+        width: 36px;
+        height: 36px;
+        object-fit: cover;
+        border-radius: 4px;
+    }
+
+    .reply-highlight {
+    animation: replyFlash 1.2s ease;
+      }
+
+      @keyframes replyFlash {
+          0%   { background-color: rgba(37, 211, 102, 0.35); }
+          100% { background-color: inherit; }
+      }
+
     .date-divider {
       align-self: center;
       background: var(--system-msg-bg);
@@ -279,6 +325,9 @@
 
 <script>
     // --- STATE VARIABLES ---
+
+
+    let isNavigatingToReply = false;
     let currentPhone = null;
     let chatHistoryTimer = null;
     let chatListTimer = null;
@@ -292,6 +341,10 @@
     // --- INITIALIZATION ---
     loadChats(); loadMyProfile(); loadQuickReplies();
     chatListTimer = setInterval(loadChats, 4000); // Poll chat list 4s
+
+    function dbg(label, data = '') {
+    console.log(`[DEBUG] ${label}`, data);
+    }
 
     // --- INPUT HANDLERS ---
     const msgInput = document.getElementById('msg-input');
@@ -447,6 +500,14 @@
 
         async function refreshChat(forceScroll = false) {
 
+              if (isNavigatingToReply) {
+                  dbg('refreshChat SKIPPED (navigating to reply)');
+                  return;
+              }
+
+              dbg('refreshChat START', { forceScroll, isNavigatingToReply });
+
+
             // 🔒 Keep date tracking local to this render
             let lastRenderedDate = null;
 
@@ -471,7 +532,9 @@
                 lastRenderedCount = msgs.length;
 
                 const container = document.getElementById('messages');
-
+                dbg('DOM RESET (innerHTML wipe)', {
+                    scrollTopBefore: container.scrollTop
+                });
                 // 🔒 Reset container (keeps your encryption banner)
                 container.innerHTML = `
                     <div style="text-align:center; margin:20px; color:#8696a0; font-size:12px;">
@@ -523,6 +586,8 @@
 
                     const div = document.createElement('div');
                     div.className = `msg ${isSent ? 'sent' : 'received'}`;
+                    div.dataset.wamid = m.whatsapp_id;
+
 
                     // Optional future-proofing (no UI change)
                     if (m.id) div.dataset.msgId = m.id;
@@ -571,25 +636,68 @@
                     /* =========================
                        ↩️ REPLY PREVIEW (SAFE)
                        ========================= */
-                    let replyHtml = '';
+                       let replyHtml = '';
 
-                    if (m.reply_to) {
-                        const replySender =
-                            m.reply_to.sender_name ||
-                            (m.reply_to.sender === 'agent' ? 'You' : 'User');
+                       if (m.reply_to) {
+                           let previewText = '';
+                           let previewThumb = '';
 
-                        const replyText =
-                            m.reply_to.message
-                                ? m.reply_to.message.substring(0, 80)
-                                : (m.reply_to.media_type ? 'Media message' : '');
+                           // -------- Determine preview text --------
+                           if (m.reply_to.message) {
+                               previewText = m.reply_to.message.substring(0, 80);
+                           } else if (m.reply_to.media_type) {
+                               const mediaMap = {
+                                   image: '📷 Photo',
+                                   video: '🎥 Video',
+                                   audio: '🎵 Audio',
+                                   voice: '🎵 Voice message',
+                                   document: '📄 Document',
+                                   sticker: '🧩 Sticker'
+                               };
+                               previewText = mediaMap[m.reply_to.media_type] || '📎 Attachment';
+                           } else {
+                               previewText = 'Message';
+                           }
 
-                        replyHtml = `
-                            <div class="reply-preview">
-                                <div class="reply-author">${replySender}</div>
-                                <div class="reply-text">${replyText}</div>
-                            </div>
-                        `;
-                    }
+                           // -------- Optional thumbnail --------
+                           if (
+                               (m.reply_to.media_type === 'image' || m.reply_to.media_type === 'video') &&
+                               m.reply_to.media_id
+                           ) {
+                               previewThumb = `
+                                 <img
+                                   src="/media/${m.reply_to.media_id}"
+                                   class="reply-thumb"
+                                   loading="lazy"
+                                   onerror="this.style.display='none'"
+                                 >
+                               `;
+                           }
+
+                           // -------- IMPORTANT CHANGE --------
+                           // data-reply-id ONLY if whatsapp_id exists
+                           const replyAttr = m.reply_to.whatsapp_id
+                               ? `data-reply-id="${m.reply_to.whatsapp_id}"`
+                               : '';
+
+                           replyHtml = `
+                             <div class="reply-preview" ${replyAttr}>
+                               <div class="reply-bar"></div>
+                               <div class="reply-content">
+                                 <div class="reply-author">
+                                   ${m.reply_to.sender === 'agent' ? 'You' : 'User'}
+                                 </div>
+                                 <div class="reply-row">
+                                   ${previewThumb}
+                                   <div class="reply-text">${previewText}</div>
+                                 </div>
+                               </div>
+                             </div>
+                           `;
+                       }
+
+
+
 
 
                     div.innerHTML = `
@@ -602,7 +710,7 @@
                 });
 
                 // ⬇️ Scroll behavior (UNCHANGED)
-                if (forceScroll) {
+                if (forceScroll && !isNavigatingToReply) {
                     container.scrollTop = container.scrollHeight;
                 }
 
@@ -885,6 +993,49 @@ async function stopRecording(send) {
             document.getElementById('send-btn').style.display = val ? 'block' : 'none';
             document.getElementById('mic-btn').style.display = val ? 'none' : 'block';
         }
+
+        document.addEventListener('click', function (e) {
+            const replyBox = e.target.closest('.reply-preview');
+            if (!replyBox) return;
+
+            const targetId = replyBox.dataset.replyId;
+            dbg('Reply clicked, target wamid', targetId);
+
+            if (!targetId) {
+                dbg('ABORT: reply preview has no targetId');
+                return;
+            }
+
+            const targetMsg = document.querySelector(`[data-wamid="${targetId}"]`);
+            if (!targetMsg) {
+                dbg('ABORT: target message not found in DOM');
+                return;
+            }
+
+            isNavigatingToReply = true;
+
+            const container = document.getElementById('messages');
+
+            dbg('Before scroll', {
+                containerScrollTop: container.scrollTop,
+                targetOffsetTop: targetMsg.offsetTop
+            });
+
+            targetMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            setTimeout(() => {
+                dbg('After scroll (300ms)', { containerScrollTop: container.scrollTop });
+            }, 300);
+
+            targetMsg.classList.add('reply-highlight');
+
+            setTimeout(() => {
+                targetMsg.classList.remove('reply-highlight');
+                isNavigatingToReply = false;
+                dbg('Navigation finished');
+            }, 1200);
+        });
+
 </script>
 </body>
 </html>
