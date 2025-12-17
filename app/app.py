@@ -14,6 +14,7 @@ from db import get_conn  # assumes db.get_conn exists and DATABASE_URL set
 import tempfile
 from flask import Response
 import traceback
+import subprocess
 TARGET_WABA_ID = "707727951897342"
 
 
@@ -26,6 +27,13 @@ WHATSAPP_TOKEN = os.getenv("WA_TOKEN")
 
 PHONE_NUMBER_ID = os.getenv("WA_PHONE")
 WABA_ID = os.getenv("WA_WABA_ID")
+
+def log(title, payload):
+    print("\n" + "=" * 80)
+    print(f"{datetime.utcnow().isoformat()} :: {title}")
+    print(json.dumps(payload, indent=2))
+    print("=" * 80 + "\n")
+    sys.stdout.flush()
 
 
 
@@ -76,368 +84,6 @@ def get_current_user():
     return u
 
 '''
-@app.route("/webhook", methods=["GET", "POST"])
-def webhook():
-    # -----------------------------------------------------
-    # 1️⃣ VERIFICATION (META HANDSHAKE)
-    # -----------------------------------------------------
-    if request.method == "GET":
-        print("webhook get:")
-        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
-        return "Verification failed", 403
-
-    # -----------------------------------------------------
-    # 2️⃣ INCOMING EVENTS (POST)
-    # -----------------------------------------------------
-    try:
-        print("webhook post:")
-
-        data = request.get_json(silent=True) or {}
-        entry = data.get("entry", [])
-
-        if not entry: return "OK", 200
-        changes = entry[0].get("changes", [])
-        if not changes: return "OK", 200
-
-        value = changes[0].get("value", {})
-
-        # -------------------------------------------------
-        # 3️⃣ IDENTIFY SAAS ACCOUNT (WITH FALLBACK FIX)
-        # -------------------------------------------------
-        metadata = value.get("metadata", {})
-        print("FULL METADATA:", metadata, file=sys.stdout)
-
-        incoming_phone_id = metadata.get("phone_number_id")
-
-        # Diagnostic Log
-        print(f"🔹 Webhook Hit! Incoming Phone ID: {incoming_phone_id}", file=sys.stdout)
-
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        whatsapp_account_id = None
-
-        if incoming_phone_id:
-            # A. Try Exact Match
-            cur.execute("""
-                SELECT id FROM whatsapp_accounts
-                WHERE phone_number_id = %s
-                ORDER BY id DESC LIMIT 1
-            """, (incoming_phone_id,))
-            account_row = cur.fetchone()
-
-            if account_row:
-                whatsapp_account_id = account_row['id']
-                print(f"✅ Exact Match Found: Account ID {whatsapp_account_id}", file=sys.stdout)
-            else:
-                # B. 🟢 SAFETY FALLBACK: If exact match failed, use the LATEST account
-                print(f"⚠️ Mismatch! Phone ID {incoming_phone_id} not in DB. Using Fallback.", file=sys.stdout)
-                cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
-                fallback_row = cur.fetchone()
-                if fallback_row:
-                    whatsapp_account_id = fallback_row['id']
-                    print(f"🔸 Used Latest Account ID: {whatsapp_account_id}", file=sys.stdout)
-
-        # If we STILL don't have an ID, we log critical error but try to continue (will save as NULL)
-        if not whatsapp_account_id:
-            print("❌ CRITICAL: No Accounts found in DB. Message will save as NULL.", file=sys.stdout)
-
-        # -------------------------------------------------
-        # 4️⃣ CAPTURE CONTACT NAME
-        # -------------------------------------------------
-        contacts_data = value.get("contacts", [])
-        if contacts_data:
-            contact = contacts_data[0]
-            wa_phone = contact.get("wa_id")
-            profile_name = contact.get("profile", {}).get("name")
-
-            if wa_phone and profile_name:
-                try:
-                    cur.execute("""
-                        INSERT INTO contacts (phone, name)
-                        VALUES (%s, %s)
-                        ON CONFLICT (phone)
-                        DO UPDATE SET name = EXCLUDED.name
-                    """, (wa_phone, profile_name))
-                except Exception as e:
-                    print(f"⚠️ Error saving name: {e}")
-
-        # -------------------------------------------------
-        # 5️⃣ PROCESS INCOMING MESSAGES
-        # -------------------------------------------------
-        messages = value.get("messages", [])
-        for msg in messages:
-            try:
-                phone = msg.get("from")
-                wa_id = msg.get("id")
-                msg_type = msg.get("type")
-
-                # Ensure contact exists
-                cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
-
-                # --- A. TEXT MESSAGES ---
-                if msg_type == "text":
-                    text = msg.get("text", {}).get("body")
-                    if phone and text:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
-                        """, (whatsapp_account_id, phone, text, wa_id))
-
-                # --- B. MEDIA MESSAGES (Image, Audio, Video, Document, Sticker) ---
-                elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
-                    media_object = msg.get(msg_type, {})
-                    media_id = media_object.get("id")
-                    caption = media_object.get("caption", "") # Only image/video/doc have captions
-
-                    if phone and media_id:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, %s, %s, 'received', NOW())
-                        """, (whatsapp_account_id, phone, msg_type, media_id, caption, wa_id))
-
-                # --- C. INTERACTIVE (Buttons / Lists / Quick Replies) ---
-                elif msg_type == "interactive":
-                    interactive = msg.get("interactive", {})
-                    i_type = interactive.get("type")
-                    text_response = ""
-
-                    if i_type == "button_reply":
-                        text_response = interactive.get("button_reply", {}).get("title")
-                    elif i_type == "list_reply":
-                        text_response = interactive.get("list_reply", {}).get("title")
-
-                    if text_response:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
-                        """, (whatsapp_account_id, phone, text_response, wa_id))
-
-                # --- D. UNKNOWN ---
-                else:
-                    print(f"Ignored message type: {msg_type}")
-
-            except Exception:
-                print("❌ Error processing specific message")
-                traceback.print_exc()
-
-        # -------------------------------------------------
-        # 6️⃣ PROCESS STATUS UPDATES
-        # -------------------------------------------------
-        statuses = value.get("statuses", [])
-        for s in statuses:
-            try:
-                wa_id = s.get("id")
-                new_status = s.get("status") # sent, delivered, read
-
-                if wa_id and new_status:
-                    # 🟢 FIX: Update status purely based on Message ID (globally unique).
-                    # Removing the Account ID check here ensures ticks update even if Account ID mapping was fuzzy.
-                    cur.execute("""
-                        SELECT status FROM messages WHERE whatsapp_id = %s
-                    """, (wa_id,))
-                    row = cur.fetchone()
-
-                    if row:
-                        current_status = row['status']
-                        should_update = True
-
-                        # Logic: read > delivered > sent
-                        if current_status == 'read': should_update = False
-                        elif current_status == 'delivered' and new_status == 'sent': should_update = False
-
-                        if should_update:
-                            cur.execute("""
-                                UPDATE messages SET status = %s WHERE whatsapp_id = %s
-                            """, (new_status, wa_id))
-                    else:
-                        pass # Message might not be in DB yet
-
-            except Exception:
-                print("❌ Error processing status update")
-                traceback.print_exc()
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-        print(f"❌ Fatal Webhook Error: {e}", file=sys.stdout)
-        traceback.print_exc()
-    return "OK", 200
-'''
-'''
-@app.route("/webhook", methods=["GET", "POST"])
-def webhook():
-    # 1. VERIFICATION
-    if request.method == "GET":
-        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
-
-        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
-            return request.args.get("hub.challenge"), 200
-        return "Verification failed", 403
-
-    # 2. RAW LOGGING (The most important part)
-    try:
-        raw_data = request.get_data(as_text=True)
-        print(f"\n🔥🔥🔥 WEBHOOK RECEIVED RAW DATA:\n{raw_data}\n🔥🔥🔥", file=sys.stdout)
-        sys.stdout.flush()
-
-        # Parse JSON manually to be safe
-        data = json.loads(raw_data)
-
-        entry = data.get("entry", [])
-        if not entry: return "OK", 200
-        changes = entry[0].get("changes", [])
-        if not changes: return "OK", 200
-        value = changes[0].get("value", {})
-
-
-    # 2. INCOMING EVENTS
-    try:
-        data = request.get_json(silent=True) or {}
-        entry = data.get("entry", [])
-        if not entry: return "OK", 200
-
-        changes = entry[0].get("changes", [])
-        if not changes: return "OK", 200
-
-        value = changes[0].get("value", {})
-
-        # --- DIAGNOSTIC LOGGING ---
-        metadata = value.get("metadata", {})
-        print("FULL METADATA:", metadata, file=sys.stdout)
-
-        incoming_phone_id = metadata.get("phone_number_id")
-        print(f"🔹 [WEBHOOK] Hit! Phone ID: {incoming_phone_id}", file=sys.stdout)
-        sys.stdout.flush()
-
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 3. IDENTIFY ACCOUNT (With Fallback)
-        whatsapp_account_id = None
-        if incoming_phone_id:
-            cur.execute("SELECT id FROM whatsapp_accounts WHERE phone_number_id = %s", (incoming_phone_id,))
-            row = cur.fetchone()
-            if row:
-                whatsapp_account_id = row['id']
-                print(f"✅ Exact Match: ID {whatsapp_account_id}", file=sys.stdout)
-
-    # 2. 🟢 HARDCODED FALLBACK: Force to TARGET_WABA_ID if exact match fails
-        if not whatsapp_account_id:
-            print(f"⚠️ Mismatch! Forcing assignment to WABA {TARGET_WABA_ID}", file=sys.stdout)
-            cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
-            fallback = cur.fetchone()
-            if fallback:
-                whatsapp_account_id = fallback['id']
-            else:
-                print("❌ CRITICAL: Targeted WABA not found in DB", file=sys.stdout)
-
-        # 4. CAPTURE NAME
-        contacts_data = value.get("contacts", [])
-        if contacts_data:
-            contact = contacts_data[0]
-            try:
-                cur.execute("""
-                    INSERT INTO contacts (phone, name) VALUES (%s, %s)
-                    ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name
-                """, (contact.get("wa_id"), contact.get("profile", {}).get("name")))
-            except: pass
-
-        # 5. PROCESS MESSAGES
-        messages = value.get("messages", [])
-        for msg in messages:
-            try:
-                phone = msg.get("from")
-                wa_id = msg.get("id")
-                msg_type = msg.get("type")
-
-                cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
-
-                # Text
-                if msg_type == "text":
-                    text = msg.get("text", {}).get("body")
-                    print(f"webhook inset text:")
-                    cur.execute("""
-                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
-                        VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
-                    """, (whatsapp_account_id, phone, text, wa_id))
-
-                # Media
-                elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
-                    media_obj = msg.get(msg_type, {})
-                    print(f"webhook inset img:")
-                    cur.execute("""
-                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
-                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, 'received', NOW())
-                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption",""), wa_id))
-
-                elif msg_type == "interactive":
-                    interactive = msg.get("interactive", {})
-                    i_type = interactive.get("type")
-
-                    # 🔍 LOGGING: See exactly what the button click contains
-                    print(f"🔹 [WEBHOOK] Interactive Type: {i_type}", file=sys.stdout)
-                    print(f"🔹 [WEBHOOK] Full Payload: {interactive}", file=sys.stdout)
-
-                    resp = ""
-                    if i_type == "button_reply":
-                        resp = interactive.get("button_reply", {}).get("title")
-                    elif i_type == "list_reply":
-                        resp = interactive.get("list_reply", {}).get("title")
-                    else:
-                        # Handle unknown types (like nfm_reply) so they don't vanish
-                        resp = f"[{i_type}]"
-
-                    if resp:
-                        # 🟢 FORCE ID CHECK
-                        if not whatsapp_account_id:
-                            print("⚠️ [WEBHOOK] No Account ID. Fetching fallback...", file=sys.stdout)
-                            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
-                            fb_row = cur.fetchone()
-                            if fb_row: whatsapp_account_id = fb_row['id']
-
-                        print(f"✅ [WEBHOOK] Saving Interactive Msg: '{resp}' for Acc ID: {whatsapp_account_id}", file=sys.stdout)
-
-                        cur.execute("""
-                            INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
-                            VALUES (%s, %s, 'customer', %s, %s, 'received', NOW())
-                        """, (whatsapp_account_id, phone, resp, wa_id))
-
-            except Exception as e:
-                print(f"❌ Msg Save Error: {e}", file=sys.stdout)
-                traceback.print_exc()
-
-        # 6. STATUS UPDATES
-        statuses = value.get("statuses", [])
-        for s in statuses:
-            cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
-
-        conn.commit()
-        cur.close(); conn.close()
-        sys.stdout.flush()
-
-    except Exception as e:
-        print(f"❌ Webhook Fatal: {e}", file=sys.stdout)
-        traceback.print_exc()
-        sys.stdout.flush()
-
-    return "OK", 200
-'''
-
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     # -----------------------------------------------------
@@ -588,6 +234,256 @@ def webhook():
         sys.stdout.flush()
 
     return "OK", 200
+'''
+
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    # -----------------------------------------------------
+    # 1️⃣ VERIFICATION
+    # -----------------------------------------------------
+    if request.method == "GET":
+        print("\n🔥🔥🔥 WEBHOOK Get HIT 🔥🔥🔥")
+        sys.stdout.flush()
+
+        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
+        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
+            return request.args.get("hub.challenge"), 200
+        return "Verification failed", 403
+
+    # -----------------------------------------------------
+    # 2️⃣ INCOMING EVENTS (POST)
+    # -----------------------------------------------------
+    try:
+        # 🔥 RAW LOGGING (KEEP – useful for debugging replies)
+        raw_data = request.get_data(as_text=True)
+        print("\n🔥🔥🔥 WEBHOOK Post HIT 🔥🔥🔥")
+
+        print(f"\n🔥🔥🔥 RAW WEBHOOK:\n{raw_data}\n", file=sys.stdout)
+        sys.stdout.flush()
+
+        data = json.loads(raw_data)
+
+        entry = data.get("entry", [])
+        if not entry:
+            return "OK", 200
+
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return "OK", 200
+
+        value = changes[0].get("value", {})
+
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # -------------------------------------------------
+        # 🟢 FORCE TARGET WABA ID (UNCHANGED)
+        # -------------------------------------------------
+        cur.execute(
+            "SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+            (TARGET_WABA_ID,)
+        )
+        account_row = cur.fetchone()
+
+        if not account_row:
+            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            account_row = cur.fetchone()
+
+        whatsapp_account_id = account_row["id"] if account_row else None
+
+        if not whatsapp_account_id:
+            print("❌ CRITICAL: No Account ID found!", file=sys.stdout)
+
+        # -------------------------------------------------
+        # 3️⃣ CAPTURE CONTACT NAME (UNCHANGED)
+        # -------------------------------------------------
+        contacts_data = value.get("contacts", [])
+        if contacts_data:
+            contact = contacts_data[0]
+            try:
+                cur.execute("""
+                    INSERT INTO contacts (phone, name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (phone)
+                    DO UPDATE SET name = EXCLUDED.name
+                """, (
+                    contact.get("wa_id"),
+                    contact.get("profile", {}).get("name")
+                ))
+            except Exception:
+                pass
+
+        # -------------------------------------------------
+        # 4️⃣ PROCESS MESSAGES (✨ REPLY SUPPORT ADDED)
+        # -------------------------------------------------
+        messages = value.get("messages", [])
+        for msg in messages:
+            log("WEBHOOK → FULL MESSAGE OBJECT", msg)
+
+            try:
+                phone = msg.get("from")
+                wa_id = msg.get("id")
+                msg_type = msg.get("type")
+
+                # 🟢 NEW: REPLY CONTEXT (THIS IS THE FIX)
+                context_whatsapp_id = None
+                context = msg.get("context")
+                if context:
+                    log("WEBHOOK → CONTEXT FOUND", context)
+                    context_whatsapp_id = context.get("id")
+                else:
+                    print("⚠️ WEBHOOK → NO CONTEXT FOR THIS MESSAGE")
+                    sys.stdout.flush()
+
+
+                # Ensure contact exists
+                cur.execute(
+                    "INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING",
+                    (phone,)
+                )
+
+                # ---------- TEXT ----------
+                if msg_type == "text":
+                    text = msg.get("text", {}).get("body")
+                    if text:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                whatsapp_account_id,
+                                user_phone,
+                                sender,
+                                message,
+                                whatsapp_id,
+                                context_whatsapp_id,
+                                status,
+                                timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
+                        """, (
+                            whatsapp_account_id,
+                            phone,
+                            text,
+                            wa_id,
+                            context_whatsapp_id
+                        ))
+
+                # ---------- MEDIA ----------
+                elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
+                    media_obj = msg.get(msg_type, {})
+                    caption = media_obj.get("caption", "")
+                    media_id = media_obj.get("id")
+
+                    if media_id:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                whatsapp_account_id,
+                                user_phone,
+                                sender,
+                                media_type,
+                                media_id,
+                                message,
+                                whatsapp_id,
+                                context_whatsapp_id,
+                                status,
+                                timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())
+                        """, (
+                            whatsapp_account_id,
+                            phone,
+                            msg_type,
+                            media_id,
+                            caption,
+                            wa_id,
+                            context_whatsapp_id
+                        ))
+
+                # ---------- INTERACTIVE ----------
+                elif msg_type == "interactive":
+                    interactive = msg.get("interactive", {})
+                    i_type = interactive.get("type")
+
+                    resp = ""
+                    if i_type == "button_reply":
+                        resp = interactive.get("button_reply", {}).get("title")
+                    elif i_type == "list_reply":
+                        resp = interactive.get("list_reply", {}).get("title")
+                    else:
+                        resp = f"[{i_type}]"
+
+                    if resp:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                whatsapp_account_id,
+                                user_phone,
+                                sender,
+                                message,
+                                whatsapp_id,
+                                context_whatsapp_id,
+                                status,
+                                timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
+                        """, (
+                            whatsapp_account_id,
+                            phone,
+                            resp,
+                            wa_id,
+                            context_whatsapp_id
+                        ))
+
+                # ---------- BUTTON ----------
+                elif msg_type == "button":
+                    btn = msg.get("button", {})
+                    text = btn.get("text")
+                    if text:
+                        cur.execute("""
+                            INSERT INTO messages (
+                                whatsapp_account_id,
+                                user_phone,
+                                sender,
+                                message,
+                                whatsapp_id,
+                                context_whatsapp_id,
+                                status,
+                                timestamp
+                            )
+                            VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
+                        """, (
+                            whatsapp_account_id,
+                            phone,
+                            text,
+                            wa_id,
+                            context_whatsapp_id
+                        ))
+
+                else:
+                    print(f"⚠️ Ignored msg type: {msg_type}", file=sys.stdout)
+
+            except Exception as e:
+                print(f"❌ Message Processing Error: {e}", file=sys.stdout)
+                traceback.print_exc()
+
+        # -------------------------------------------------
+        # 5️⃣ STATUS UPDATES (UNCHANGED)
+        # -------------------------------------------------
+        statuses = value.get("statuses", [])
+        for s in statuses:
+            cur.execute(
+                "UPDATE messages SET status = %s WHERE whatsapp_id = %s",
+                (s.get("status"), s.get("id"))
+            )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        sys.stdout.flush()
+
+    except Exception as e:
+        print(f"❌ Webhook Fatal Error: {e}", file=sys.stdout)
+        traceback.print_exc()
+        sys.stdout.flush()
+
+    return "OK", 200
 
 
             # ---------- Auth routes ----------
@@ -696,8 +592,81 @@ def list_users():
 
     return jsonify(rows)
 
+@app.route("/history")
+@login_required
+def history():
+    phone = normalize_phone(request.args.get("phone"))
+    account_id = get_active_account_id()
 
+    if not phone or not account_id:
+        return jsonify([])
 
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT
+            m.sender,
+            m.message,
+            m.media_type,
+            m.media_id,
+            m.status,
+            m.timestamp,
+
+            -- 🟢 REPLY OBJECT (WhatsApp-style)
+            CASE
+                WHEN r.id IS NULL THEN NULL
+                ELSE json_build_object(
+                    'sender', r.sender,
+                    'sender_name',
+                        CASE
+                            WHEN r.sender = 'agent' THEN 'You'
+                            ELSE c.name
+                        END,
+                    'message', r.message,
+                    'media_type', r.media_type
+                )
+            END AS reply_to
+
+        FROM messages m
+
+        -- 🔗 JOIN replied-to message
+        LEFT JOIN messages r
+            ON m.context_whatsapp_id = r.whatsapp_id
+
+        -- 🔗 JOIN contact for NAME
+        LEFT JOIN contacts c
+            ON r.user_phone = c.phone
+
+        WHERE m.user_phone = %s
+          AND m.whatsapp_account_id = %s
+
+        ORDER BY m.timestamp ASC
+    """, (phone, account_id))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    results = []
+    for r in rows:
+        ts = r["timestamp"].isoformat() if r["timestamp"] else ""
+        if ts and not ts.endswith("Z"):
+            ts += "Z"
+
+        results.append({
+            "sender": r["sender"],
+            "message": r["message"],
+            "media_type": r["media_type"],
+            "media_id": r["media_id"],
+            "status": r["status"],
+            "timestamp": ts,
+            "reply_to": r["reply_to"]
+        })
+
+    return jsonify(results)
+
+'''
 @app.route("/history")
 @login_required
 def history():
@@ -730,46 +699,9 @@ def history():
         results.append(r)
 
     return jsonify(results)
-
-'''
-@app.route("/send_text", methods=["POST"])
-def send_text():
-    data = request.json
-    phone = data.get("phone")
-    text = data.get("text")
-
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-
-    # 🟢 Get Credentials for the LATEST Active Account
-    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
-    account = cur.fetchone()
-
-    if not account:
-        cur.close(); conn.close()
-        return jsonify({"error": "No account connected"}), 400
-
-    url = f"https://graph.facebook.com/v20.0/{account['phone_number_id']}/messages"
-    headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
-    payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": text}}
-
-    try:
-        resp = requests.post(url, json=payload, headers=headers)
-        wa_id = resp.json().get("messages", [{}])[0].get("id")
-        print("sned_text")
-        # 🟢 CRITICAL: Save using account['id'] so it matches the /history endpoint
-        cur.execute("""
-            INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp)
-            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
-        """, (account['id'], phone, text, wa_id))
-
-        conn.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cur.close(); conn.close()
 '''
 
+'''
 @app.route("/send_text", methods=["POST"])
 def send_text():
     data = request.json
@@ -798,6 +730,79 @@ def send_text():
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+'''
+@app.route("/send_text", methods=["POST"])
+def send_text():
+    data = request.json
+    phone = normalize_phone(data.get("phone"))
+    text = data.get("text")
+    reply_to = data.get("reply_to")  # may be None
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # 🟢 FORCE TARGET WABA
+    cur.execute(
+        "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+        (TARGET_WABA_ID,)
+    )
+    acc = cur.fetchone()
+
+    if not acc:
+        cur.close(); conn.close()
+        return jsonify({"error": "No WhatsApp account"}), 400
+
+    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+    headers = {
+        "Authorization": f"Bearer {acc['access_token']}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    if reply_to:
+        payload["context"] = {"message_id": reply_to}
+
+    resp = requests.post(url, headers=headers, json=payload)
+    resp_json = resp.json()
+    log("SEND_TEXT → PAYLOAD", payload)
+    log("SEND_TEXT ← RESPONSE", resp_json)
+    messages = resp_json.get("messages")
+
+    wa_id = messages[0].get("id") if isinstance(messages, list) and messages else None
+
+    if not wa_id:
+        log("❌ NO WHATSAPP MESSAGE ID RETURNED", resp_json)
+
+    cur.execute("""
+        INSERT INTO messages (
+            whatsapp_account_id,
+            user_phone,
+            sender,
+            message,
+            whatsapp_id,
+            context_whatsapp_id,
+            status,
+            timestamp
+        )
+        VALUES (%s, %s, 'agent', %s, %s, %s, 'sent', NOW())
+    """, (
+        acc["id"],
+        phone,
+        text,
+        wa_id,
+        reply_to
+    ))
+
+    conn.commit()
+    cur.close(); conn.close()
+
+    return jsonify({"success": True})
 
 
 
@@ -940,7 +945,7 @@ def send_whatsapp_image(phone, media_id, caption=None):
 
     if response.status_code != 200:
         raise Exception(f"Send image failed: {response.text}")
-
+'''
 @app.route("/send_design", methods=["POST"])
 def send_design():
     try:
@@ -1101,6 +1106,99 @@ def send_design():
         print("❌ SEND DESIGN ERROR")
         traceback.print_exc()
         return jsonify({"error": "internal error"}), 500
+'''
+
+@app.route("/send_design", methods=["POST"])
+def send_design():
+    try:
+        phone = normalize_phone(request.form.get("phone"))
+        caption = request.form.get("caption", "")
+        whatsapp_account_id = request.form.get("whatsapp_account_id")
+        file = request.files.get("file")
+
+        if not phone or not file or not whatsapp_account_id:
+            return jsonify({"error": "missing data"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute("""
+            SELECT phone_number_id, access_token
+            FROM whatsapp_accounts
+            WHERE id = %s
+        """, (whatsapp_account_id,))
+        acc = cur.fetchone()
+
+        if not acc:
+            cur.close(); conn.close()
+            return jsonify({"error": "invalid account"}), 400
+
+        # save temp file
+        import tempfile, os
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        file.save(tmp.name)
+        tmp.close()
+
+        upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
+        upload_headers = {"Authorization": f"Bearer {acc['access_token']}"}
+
+        with open(tmp.name, "rb") as f:
+            upload_resp = requests.post(
+                upload_url,
+                headers=upload_headers,
+                data={"messaging_product": "whatsapp"},
+                files={"file": (file.filename, f, file.mimetype)}
+            ).json()
+
+        media_id = upload_resp.get("id")
+        if not media_id:
+            return jsonify(upload_resp), 500
+
+        send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        send_resp = requests.post(
+            send_url,
+            headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "image",
+                "image": {"id": media_id, "caption": caption}
+            }
+        ).json()
+
+        wa_id = send_resp.get("messages", [{}])[0].get("id")
+        if not wa_id:
+            print("❌ send_design: No whatsapp_id", send_resp)
+
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                media_type,
+                media_id,
+                message,
+                whatsapp_id,
+                status
+            )
+            VALUES (%s, %s, 'agent', 'image', %s, %s, %s, 'sent')
+        """, (
+            whatsapp_account_id,
+            phone,
+            media_id,
+            caption,
+            wa_id
+        ))
+
+        conn.commit()
+        cur.close(); conn.close()
+        os.unlink(tmp.name)
+
+        return jsonify({"success": True})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route("/media/<media_id>")
@@ -1183,94 +1281,188 @@ def download_whatsapp_media(media_id):
     return media_resp.content, content_type
 
 # 2. Universal Attachment Handler (Images, Video, Audio, Docs)
+'''
 @app.route("/send_attachment", methods=["POST"])
 def send_attachment():
     try:
-        # 🟢 1. Normalize Phone & Clean Input
         phone = normalize_phone(request.form.get("phone"))
         caption = request.form.get("caption", "")
         file = request.files.get("file")
         msg_type = request.form.get("type", "image")
 
-        if not phone or not file:
-            return jsonify({"error": "missing data"}), 400
+        if not phone or not file: return jsonify({"error": "missing data"}), 400
 
-        # 🟢 2. Get Account
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
         acc = cur.fetchone()
 
-        # Fallback
         if not acc:
             cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
             acc = cur.fetchone()
 
+        cur.close(); conn.close()
+        if not acc: return jsonify({"error": "No account"}), 400
+
+        # Read file content
+        file_content = file.read()
+        if len(file_content) < 100: return jsonify({"error": "Empty file"}), 400
+
+        # 🟢 FIX: VOICE NOTE FORMATTING
+        # Chrome records in WebM/Opus. WhatsApp accepts Opus if labeled as OGG/Opus.
+        # We rename to .opus and set the specific codec header.
+        if msg_type == "audio":
+            ogg_bytes = convert_webm_to_ogg(file_content)
+
+            files = {
+                "file": (
+                    "voice.ogg",
+                    ogg_bytes,
+                    "audio/ogg"
+                )
+            }
+            caption = ""
+        else:
+            files = {
+                "file": (file.filename, file_content, file.mimetype)
+            }
+
+        # Upload
+        print("🎧 Incoming upload:")
+        print("Filename:", file.filename)
+        print("Content-Type:", file.mimetype)
+        print("Size:", len(file_content))
+
+        upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
+        headers = {"Authorization": f"Bearer {acc['access_token']}"}
+
+        print(f"📤 Uploading {msg_type}...", file=sys.stdout)
+        up_resp = requests.post(upload_url, headers=headers, files=files, data={"messaging_product": "whatsapp"}).json()
+
+        media_id = up_resp.get("id")
+        if not media_id:
+            print("❌ Upload Error:", up_resp, file=sys.stdout)
+            return jsonify(up_resp), 500
+
+        # Send
+        msg_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": media_id}}
+        if msg_type in ['image', 'video', 'document'] and caption: payload[msg_type]["caption"] = caption
+
+        send_resp = requests.post(msg_url, json=payload, headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}).json()
+
+        if "messages" not in send_resp:
+            print("❌ Send Error:", send_resp, file=sys.stdout)
+            return jsonify(send_resp), 400
+
+        wa_id = send_resp["messages"][0]["id"]
+
+        # Save
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+            VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
+        """, (acc['id'], phone, msg_type, media_id, caption, wa_id))
+        conn.commit(); cur.close(); conn.close()
+        print("📤 Meta upload response:", up_resp)
+        print("📨 Meta send response:", send_resp)
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print("❌ Exception:", e)
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+'''
+
+@app.route("/send_attachment", methods=["POST"])
+def send_attachment():
+    try:
+        phone = normalize_phone(request.form.get("phone"))
+        caption = request.form.get("caption", "")
+        file = request.files.get("file")
+        msg_type = request.form.get("type", "image")
+
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+            (TARGET_WABA_ID,)
+        )
+        acc = cur.fetchone()
+        cur.close(); conn.close()
+
         if not acc:
-            cur.close(); conn.close()
             return jsonify({"error": "No account"}), 400
 
-        # 🟢 3. PREPARE FILE & MIMETYPE
-        # Read file content into memory to ensure clean upload
-        file_content = file.read()
-
-        if msg_type == 'audio':
-            # Force OGG for voice notes (Meta requirement)
-            files = {"file": ("voice.ogg", file_content, "audio/ogg")}
-            caption = "" # 🔴 CRITICAL: Audio cannot have captions in WhatsApp API
-        else:
-            files = {"file": (file.filename, file_content, file.mimetype)}
-
-        # 4. Upload to Meta
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
-        up_resp = requests.post(
+        upload_headers = {"Authorization": f"Bearer {acc['access_token']}"}
+
+        files = {"file": (file.filename, file.read(), file.mimetype)}
+        upload_resp = requests.post(
             upload_url,
-            headers={"Authorization": f"Bearer {acc['access_token']}"},
+            headers=upload_headers,
             files=files,
             data={"messaging_product": "whatsapp"}
         ).json()
 
-        media_id = up_resp.get("id")
+        media_id = upload_resp.get("id")
         if not media_id:
-            print("❌ Upload Error:", up_resp)
-            return jsonify(up_resp), 500
+            return jsonify(upload_resp), 500
 
-        # 5. Send Message
-        msg_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
-
+        send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         payload = {
             "messaging_product": "whatsapp",
             "to": phone,
             "type": msg_type,
             msg_type: {"id": media_id}
         }
-
-        # Only add caption for non-audio types
-        if msg_type in ['image', 'video', 'document'] and caption:
+        if caption and msg_type in ["image", "video", "document"]:
             payload[msg_type]["caption"] = caption
 
-        send_resp = requests.post(msg_url, json=payload, headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}).json()
+        send_resp = requests.post(
+            send_url,
+            headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"},
+            json=payload
+        ).json()
 
-        if "messages" not in send_resp:
-            print("❌ Send Failed:", send_resp)
-            return jsonify(send_resp), 400
+        wa_id = send_resp.get("messages", [{}])[0].get("id")
+        if not wa_id:
+            print("❌ send_attachment: No whatsapp_id", send_resp)
 
-        wa_id = send_resp["messages"][0]["id"]
-
-        # 6. Save to DB
+        conn = get_conn()
+        cur = conn.cursor()
         cur.execute("""
-            INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+            INSERT INTO messages (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                media_type,
+                media_id,
+                message,
+                whatsapp_id,
+                status,
+                timestamp
+            )
             VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
-        """, (acc['id'], phone, msg_type, media_id, caption, wa_id))
+        """, (
+            acc["id"],
+            phone,
+            msg_type,
+            media_id,
+            caption,
+            wa_id
+        ))
+        conn.commit()
+        cur.close(); conn.close()
 
-        conn.commit(); cur.close(); conn.close()
         return jsonify({"success": True})
 
     except Exception as e:
-        print("❌ Attachment Exception:", e)
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-# 3. Add Tag (For Filtering)
+
+
+        # 3. Add Tag (For Filtering)
 @app.route("/set_tag", methods=["POST"])
 def set_tag():
     data = request.json
@@ -1406,31 +1598,30 @@ def get_templates():
 # ==========================================
 # 🟢 NEW: SEND TEMPLATE MESSAGE
 # ==========================================
+
+'''
 @app.route("/send_template", methods=["POST"])
 def send_template():
     try:
         data = request.json
-#        phone = data.get("phone")
-        phone = normalize_phone(data.get("phone"))
-
+        phone = data.get("phone")
         template_name = data.get("template_name")
         language = data.get("language", "en_US")
-        # Use the full text passed from frontend
+        # Use the full text passed from frontend for DB saving
         template_body = data.get("template_body", f"[Template: {template_name}]")
 
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 🟢 1. FORCE TARGET WABA ID
+        # 1. FORCE TARGET WABA ID
         cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
         acc = cur.fetchone()
 
         if not acc:
             cur.close(); conn.close()
-            print(f"❌ Send Template Error: Target WABA {TARGET_WABA_ID} not connected.")
             return jsonify({"error": "No account connected"}), 400
 
-        # 2. Send to Meta
+        # 2. Prepare Base Payload
         url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         headers = {
             "Authorization": f"Bearer {acc['access_token']}",
@@ -1447,16 +1638,39 @@ def send_template():
             }
         }
 
+        # 3. Attempt Send
+        print(f"📤 Sending Template: {template_name}")
         resp = requests.post(url, headers=headers, json=payload)
         json_resp = resp.json()
 
+        # 🟢 4. AUTO-FIX FOR MISSING PARAMETERS (Error 132000)
+        # If Meta says "Missing Params", we retry with a default "Customer" value
+        if "error" in json_resp and json_resp["error"].get("code") == 132000:
+            print(f"⚠️ Template requires variables. Retrying with default 'Valued Customer'...")
+
+            # Add a default body parameter
+            payload["template"]["components"] = [{
+                "type": "body",
+                "parameters": [
+                    {
+                        "type": "text",
+                        "text": "Valued Customer" # <--- The default value for {{1}}
+                    }
+                ]
+            }]
+
+            # Retry Send
+            resp = requests.post(url, headers=headers, json=payload)
+            json_resp = resp.json()
+
+        # 5. Handle Final Result
         if "messages" not in json_resp:
             print("❌ Meta Template Error:", json_resp)
             return jsonify(json_resp), 400
 
         wa_id = json_resp["messages"][0]["id"]
 
-        # 🟢 3. SAVE WITH CORRECT ACCOUNT ID
+        # 6. Save to DB
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
@@ -1473,7 +1687,73 @@ def send_template():
     except Exception as e:
         print("❌ Send Template Exception:", e)
         return jsonify({"error": str(e)}), 500
+'''
 
+@app.route("/send_template", methods=["POST"])
+def send_template():
+    data = request.json
+    phone = normalize_phone(data.get("phone"))
+    template_name = data.get("template_name")
+    language = data.get("language", "en_US")
+    template_body = data.get("template_body", f"[Template: {template_name}]")
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute(
+        "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+        (TARGET_WABA_ID,)
+    )
+    acc = cur.fetchone()
+
+    if not acc:
+        cur.close(); conn.close()
+        return jsonify({"error": "No account"}), 400
+
+    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+    headers = {
+        "Authorization": f"Bearer {acc['access_token']}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language}
+        }
+    }
+
+    resp = requests.post(url, headers=headers, json=payload).json()
+    wa_id = resp.get("messages", [{}])[0].get("id")
+
+    if not wa_id:
+        print("❌ send_template: No whatsapp_id", resp)
+
+    cur.execute("""
+        INSERT INTO messages (
+            whatsapp_account_id,
+            user_phone,
+            sender,
+            message,
+            whatsapp_id,
+            status,
+            timestamp
+        )
+        VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+    """, (
+        acc["id"],
+        phone,
+        template_body,
+        wa_id
+    ))
+
+    conn.commit()
+    cur.close(); conn.close()
+
+    return jsonify({"success": True})
 
 # ==========================================
 # 🟢 QUICK REPLIES ROUTES
@@ -1974,3 +2254,34 @@ def unread_counts():
 
     counts = {r['user_phone']: r['unread'] for r in rows}
     return jsonify(counts)
+
+
+def convert_webm_to_ogg(webm_bytes):
+    import subprocess, tempfile, os
+
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inp:
+        inp.write(webm_bytes)
+        inp_path = inp.name
+
+    out_path = inp_path.replace(".webm", ".ogg")
+
+    subprocess.run([
+        "ffmpeg",
+        "-y",
+        "-i", inp_path,
+        "-vn",
+        "-ac", "1",              # mono
+        "-ar", "48000",           # sample rate
+        "-c:a", "libopus",
+        "-b:a", "16k",            # ✅ WhatsApp bitrate
+        "-application", "voip",   # ✅ CRITICAL
+        out_path
+    ], check=True)
+
+    with open(out_path, "rb") as f:
+        ogg_bytes = f.read()
+
+    os.unlink(inp_path)
+    os.unlink(out_path)
+
+    return ogg_bytes

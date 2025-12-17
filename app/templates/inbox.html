@@ -7,6 +7,38 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    .date-divider {
+      align-self: center;
+      background: var(--system-msg-bg);
+      color: var(--secondary-text);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      margin: 12px 0;
+    }
+    .reply-preview {
+      border-left: 4px solid #00a884;
+      background: rgba(255,255,255,0.06);
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      border-radius: 4px;
+    }
+
+    .reply-author {
+      font-size: 12px;
+      font-weight: 600;
+      color: #00a884;
+    }
+
+    .reply-text {
+      font-size: 12px;
+      color: #d1d7db;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+
         :root {
             --bg-color: #0c1317; --sidebar-bg: #111b21; --header-bg: #202c33;
             --border-color: #2a3942; --incoming-bg: #202c33; --outgoing-bg: #005c4b;
@@ -313,7 +345,9 @@
             const list = document.getElementById('chat-list');
 
             // 🟢 FIX: Select the badge element directly
-            const totalUnread = allChats.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+//            const totalUnread = allChats.reduce((sum, c) => sum + (c.unread_count || 0), 0);
+            const totalUnread = allChats.filter(c => (c.unread_count || 0) > 0).length;
+
             const badgeEl = document.getElementById('filter-unread');
 
             // Safety check if element exists
@@ -389,67 +423,196 @@
         }
     // --- CHAT LOGIC ---
     async function openChat(phone, name) {
-        if(currentPhone === phone) return;
-        if(chatHistoryTimer) clearInterval(chatHistoryTimer);
-        currentPhone = phone;
+            if(currentPhone === phone) return;
+            if(chatHistoryTimer) clearInterval(chatHistoryTimer);
 
-        document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
-        const activeItem = document.getElementById(`chat-item-${phone}`);
-        if(activeItem) {
-            activeItem.classList.add('active');
-            const badge = activeItem.querySelector('.unread-badge');
-            if(badge) badge.remove();
+            // 🟢 RESET OPTIMIZATION COUNTER
+            lastRenderedCount = 0;
+
+            currentPhone = phone;
+
+            // ... (rest of your existing UI update logic) ...
+            document.querySelectorAll('.chat-item').forEach(e=>e.classList.remove('active'));
+            const a=document.getElementById(`chat-item-${phone}`); if(a){a.classList.add('active'); const b=a.querySelector('.unread-badge'); if(b)b.remove();}
+            document.getElementById('active-contact').innerText=name||phone; document.getElementById('active-name').innerText=name?phone:'';
+            const h=document.getElementById('header-avatar'); h.style.backgroundColor=getAvatarColor(phone); h.innerText=name?getInitials(name):"?";
+            document.getElementById('msg-input').disabled=false; document.getElementById('msg-input').focus();
+            document.getElementById('messages').innerHTML='<div style="text-align:center;padding:50px;">Loading...</div>';
+
+            fetch('/mark_read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
+
+            await refreshChat(true);
+            chatHistoryTimer = setInterval(refreshChat, 3000);
         }
 
-        document.getElementById('active-contact').innerText = name || phone;
-        document.getElementById('active-name').innerText = name ? phone : '';
-        const headerAvatar = document.getElementById('header-avatar');
-        headerAvatar.style.backgroundColor = getAvatarColor(phone);
-        headerAvatar.innerText = name ? getInitials(name) : "?";
-        document.getElementById('msg-input').disabled = false;
-        document.getElementById('msg-input').focus();
-        document.getElementById('messages').innerHTML = '<div style="text-align:center; padding:50px;">Loading...</div>';
+        async function refreshChat(forceScroll = false) {
 
-        fetch('/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})});
+            // 🔒 Keep date tracking local to this render
+            let lastRenderedDate = null;
 
-        await refreshChat(true);
-        chatHistoryTimer = setInterval(refreshChat, 3000);
-        loadChats(); // Immediate update sidebar
-    }
+            if (!currentPhone || isSending) return;
 
-    async function refreshChat(forceScroll = false) {
-        if (!currentPhone || isSending) return;
-        try {
-            const container = document.getElementById('messages');
-            const resp = await fetch(`/history?phone=${currentPhone}`);
-            const msgs = await resp.json();
-            if (isSending) return;
-            container.innerHTML = `<div style="text-align:center; margin:20px; color:#8696a0; font-size:12px;"><span class="material-icons" style="font-size:12px;">lock</span> Encrypted</div>`;
-            lastUserMsgTime = null;
-            msgs.forEach(m => {
-                const isSent = m.sender === 'agent';
-                if (!isSent) {
-                    const ts = new Date(m.timestamp);
-                    if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
+            try {
+                // 1️⃣ Fetch Data
+                const resp = await fetch(`/history?phone=${currentPhone}`);
+                const msgs = await resp.json();
+
+                if (isSending) return;
+
+                // 🟢 OPTIMIZATION: Stop re-rendering if nothing changed
+                if (!forceScroll && msgs.length === lastRenderedCount) {
+                    return;
                 }
-                const div = document.createElement('div'); div.className = `msg ${isSent ? 'sent' : 'received'}`;
-                let content = '';
-                if (m.media_id) {
-                    if (m.media_type==='audio'||m.media_type==='voice') content = `<audio controls src="/media/${m.media_id}"></audio>`;
-                    else if (m.media_type==='video') content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
-                    else if (m.media_type==='document') content = `<div style="padding:10px;"><a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text);">📄 Download</a></div>`;
-                    else content = `<img src="/media/${m.media_id}" class="chat-media" onclick="openImageViewer(this.src)">`;
-                    if (m.message && m.media_type!=='audio' && m.media_type!=='voice') content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
-                } else { content = linkify(m.message); }
-                const time = new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-                const tickHtml = isSent ? getTickHtml(m.status) : '';
-                div.innerHTML = `${content} <div class="msg-meta">${time} ${tickHtml}</div>`;
-                container.appendChild(div);
-            });
-            if (forceScroll) container.scrollTop = container.scrollHeight;
-            updateSessionTimer();
-        } catch(e) {}
-    }
+
+                // 🔒 Always render chronologically (IMPORTANT)
+                msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                // Update render tracker
+                lastRenderedCount = msgs.length;
+
+                const container = document.getElementById('messages');
+
+                // 🔒 Reset container (keeps your encryption banner)
+                container.innerHTML = `
+                    <div style="text-align:center; margin:20px; color:#8696a0; font-size:12px;">
+                        <span class="material-icons" style="font-size:12px;">lock</span>
+                        Messages are end-to-end encrypted.
+                    </div>
+                `;
+
+                lastUserMsgTime = null;
+
+                msgs.forEach(m => {
+                    /* =========================
+                       📅 DATE DIVIDER (WhatsApp style)
+                       ========================= */
+                    console.log('MSG:', m.message, 'REPLY_TO:', m.reply_to);
+
+                    const msgDate = new Date(m.timestamp).toDateString();
+
+                    if (msgDate !== lastRenderedDate) {
+                        const divider = document.createElement('div');
+                        divider.className = 'date-divider';
+
+                        const today = new Date().toDateString();
+                        const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+                        if (msgDate === today) divider.innerText = 'Today';
+                        else if (msgDate === yesterday) divider.innerText = 'Yesterday';
+                        else {
+                            divider.innerText = new Date(m.timestamp).toLocaleDateString(undefined, {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric'
+                            });
+                        }
+
+                        container.appendChild(divider);
+                        lastRenderedDate = msgDate;
+                    }
+
+                    const isSent = m.sender === 'agent';
+
+                    // ⏱ Track user message time for 24h session logic
+                    if (!isSent) {
+                        const ts = new Date(m.timestamp);
+                        if (!lastUserMsgTime || ts > lastUserMsgTime) {
+                            lastUserMsgTime = ts;
+                        }
+                    }
+
+                    const div = document.createElement('div');
+                    div.className = `msg ${isSent ? 'sent' : 'received'}`;
+
+                    // Optional future-proofing (no UI change)
+                    if (m.id) div.dataset.msgId = m.id;
+
+                    let content = '';
+
+                    /* =========================
+                       📎 MEDIA LOGIC (UNCHANGED)
+                       ========================= */
+                    if (m.media_id) {
+                        if (m.media_type === 'audio' || m.media_type === 'voice') {
+                            content = `<audio controls src="/media/${m.media_id}"></audio>`;
+                        } else if (m.media_type === 'video') {
+                            content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+                        } else if (m.media_type === 'document') {
+                            content = `
+                                <div style="padding:10px;">
+                                    <a href="/media/${m.media_id}" target="_blank"
+                                       style="color:var(--primary-text);">
+                                       📄 Download Document
+                                    </a>
+                                </div>`;
+                        } else {
+                            content = `
+                                <img src="/media/${m.media_id}"
+                                     class="chat-media"
+                                     loading="lazy"
+                                     onclick="openImageViewer(this.src)">`;
+                        }
+
+                        if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
+                            content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+                        }
+                    } else {
+                        // 📝 TEXT
+                        content = linkify(m.message);
+                    }
+
+                    const time = new Date(m.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                    const tickHtml = isSent ? getTickHtml(m.status) : '';
+
+                    /* =========================
+                       ↩️ REPLY PREVIEW (SAFE)
+                       ========================= */
+                    let replyHtml = '';
+
+                    if (m.reply_to) {
+                        const replySender =
+                            m.reply_to.sender_name ||
+                            (m.reply_to.sender === 'agent' ? 'You' : 'User');
+
+                        const replyText =
+                            m.reply_to.message
+                                ? m.reply_to.message.substring(0, 80)
+                                : (m.reply_to.media_type ? 'Media message' : '');
+
+                        replyHtml = `
+                            <div class="reply-preview">
+                                <div class="reply-author">${replySender}</div>
+                                <div class="reply-text">${replyText}</div>
+                            </div>
+                        `;
+                    }
+
+
+                    div.innerHTML = `
+                        ${replyHtml}
+                        ${content}
+                        <div class="msg-meta">${time} ${tickHtml}</div>
+                    `;
+
+                    container.appendChild(div);
+                });
+
+                // ⬇️ Scroll behavior (UNCHANGED)
+                if (forceScroll) {
+                    container.scrollTop = container.scrollHeight;
+                }
+
+                // ⏳ 24h session timer (UNCHANGED)
+                updateSessionTimer();
+
+            } catch (e) {
+                console.log("Refresh skipped (Network Error or Server Busy)");
+            }
+        }
 
     // --- GENERIC FUNCTIONS ---
     async function sendMessage() {
@@ -519,8 +682,183 @@
     function prepareUpload(f,t) { if(!f||!currentPhone)return; pendingFile=f; if(f.type.startsWith('video'))pendingFileType='video';else if(f.type.startsWith('image'))pendingFileType='image';else pendingFileType='document'; const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=''; if(pendingFileType==='image'){const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img);}else if(pendingFileType==='video'){const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v);}else{c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`;} document.getElementById('preview-modal').style.display='grid'; }
     function cancelUpload() { document.getElementById('preview-modal').style.display='none'; pendingFile=null; document.getElementById('hidden-file-input').value=""; }
     async function confirmUpload() { if(!pendingFile)return; const cap=document.getElementById('file-caption').value; const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',pendingFile); fd.append('type',pendingFileType); fd.append('caption',cap); document.getElementById('preview-modal').style.display='none'; isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Uploading...`); await fetch('/send_attachment',{method:'POST',body:fd}); pendingFile=null; document.getElementById('hidden-file-input').value=""; setTimeout(()=>{isSending=false;refreshChat(true);},2000); }
-    async function startRecording() { if(!navigator.mediaDevices)return alert("Mic error"); const s=await navigator.mediaDevices.getUserMedia({audio:true}); mediaRecorder=new MediaRecorder(s); audioChunks=[]; mediaRecorder.ondataavailable=e=>audioChunks.push(e.data); mediaRecorder.start(); document.getElementById('mic-btn').style.display='none'; document.getElementById('msg-input').style.display='none'; document.getElementById('recording-ui').style.display='flex'; recStartTime=Date.now(); recTimerInt=setInterval(()=>{const d=Math.floor((Date.now()-recStartTime)/1000);const m=Math.floor(d/60);const s=d%60;document.getElementById('rec-timer').innerText=`${m}:${s<10?'0'+s:s}`;},1000); }
-    async function stopRecording(send) { if(!mediaRecorder)return; mediaRecorder.onstop=async()=>{clearInterval(recTimerInt); document.getElementById('recording-ui').style.display='none'; document.getElementById('mic-btn').style.display='block'; document.getElementById('msg-input').style.display='block'; if(send){const b=new Blob(audioChunks,{type:'audio/ogg; codecs=opus'}); const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',b,'voice.ogg'); fd.append('type','audio'); isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Sending voice...`); await fetch('/send_attachment',{method:'POST',body:fd}); setTimeout(()=>{isSending=false;refreshChat(true);},1500);}}; mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(t=>t.stop()); }
+    let recorderMimeType = 'audio/webm'; // Default fallback
+/*
+    async function startRecording() {
+        if (!navigator.mediaDevices) return alert("Microphone error");
+
+        // 1. Determine best supported format
+        if (MediaRecorder.isTypeSupported('audio/ogg; codecs=opus')) {
+            recorderMimeType = 'audio/ogg; codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm; codecs=opus')) {
+            recorderMimeType = 'audio/webm; codecs=opus';
+        } else {
+            recorderMimeType = 'audio/mp4'; // Safari fallback
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream, { mimeType: recorderMimeType });
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = e => {
+                if (e.data.size > 0) audioChunks.push(e.data);
+            };
+
+            mediaRecorder.start();
+
+            // UI
+            document.getElementById('mic-btn').style.display = 'none';
+            document.getElementById('msg-input').style.display = 'none';
+            document.getElementById('recording-ui').style.display = 'flex';
+            document.getElementById('rec-timer').innerText = "0:00";
+
+            // Timer
+            recStartTime = Date.now();
+            if(recTimerInt) clearInterval(recTimerInt);
+            recTimerInt = setInterval(() => {
+                const diff = Math.floor((Date.now() - recStartTime)/1000);
+                const m = Math.floor(diff/60);
+                const s = diff % 60;
+                document.getElementById('rec-timer').innerText = `${m}:${s < 10 ? '0'+s : s}`;
+            }, 1000);
+
+        } catch(e) {
+            console.error(e);
+            alert("Mic access denied");
+        }
+    }
+*/
+
+async function startRecording() {
+    if (!navigator.mediaDevices) {
+        alert("Microphone not supported");
+        return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    let mimeType = "";
+
+    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+        mimeType = "audio/webm;codecs=opus";
+    } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+        mimeType = "audio/webm";
+    } else {
+        alert("No supported audio format found");
+        return;
+    }
+
+    console.log("🎙️ Using MediaRecorder mimeType:", mimeType);
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = e => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.start(); // 🔴 THIS was not firing correctly before
+
+    document.getElementById('mic-btn').style.display = 'none';
+    document.getElementById('msg-input').style.display = 'none';
+    document.getElementById('recording-ui').style.display = 'flex';
+
+    recStartTime = Date.now();
+    recTimerInt = setInterval(() => {
+        const diff = Math.floor((Date.now() - recStartTime) / 1000);
+        document.getElementById('rec-timer').innerText =
+            `${Math.floor(diff / 60)}:${String(diff % 60).padStart(2, '0')}`;
+    }, 1000);
+}
+
+/*
+    async function stopRecording(send) {
+            if (!mediaRecorder) return;
+            mediaRecorder.onstop = async () => {
+                clearInterval(recTimerInt);
+                document.getElementById('recording-ui').style.display = 'none';
+                document.getElementById('mic-btn').style.display = 'block';
+                document.getElementById('msg-input').style.display = 'block';
+
+                if (send) {
+                    // 🟢 FIX: USE CORRECT MIME TYPE FOR BLOB
+                    // If Chrome, this is likely 'audio/webm;codecs=opus'
+                    const mime = mediaRecorder.mimeType;
+                    const audioBlob = new Blob(audioChunks, { type: mime });
+
+                    if (audioBlob.size < 500) { alert("Recording too short."); return; }
+
+                    const formData = new FormData();
+                    formData.append('phone', currentPhone);
+                    // Send as 'voice.blob', backend will rename to .opus
+                    formData.append('file', audioBlob, 'voice.blob');
+                    formData.append('type', 'audio');
+
+                    isSending = true;
+                    document.getElementById('messages').insertAdjacentHTML('beforeend', `<div class="msg sent">🎤 Sending voice...</div>`);
+
+                    try {
+                        await fetch('/send_attachment', {method: 'POST', body: formData});
+                    } catch(e) { console.error(e); }
+
+                    setTimeout(() => {
+                        isSending = false;
+                        refreshChat(true);
+                    }, 1500);
+                }
+            };
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        }
+*/
+
+async function stopRecording(send) {
+    if (!mediaRecorder) return;
+
+    mediaRecorder.onstop = async () => {
+        clearInterval(recTimerInt);
+
+        document.getElementById('recording-ui').style.display = 'none';
+        document.getElementById('mic-btn').style.display = 'block';
+        document.getElementById('msg-input').style.display = 'block';
+
+        if (!send) return;
+
+        const audioBlob = new Blob(audioChunks, {
+            type: mediaRecorder.mimeType // usually audio/webm
+        });
+
+        if (audioBlob.size < 1000) {
+            alert("Recording too short");
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('phone', currentPhone);
+        formData.append('file', audioBlob, 'voice.webm'); // ✅ browser format
+        formData.append('type', 'audio');
+
+        isSending = true;
+        document.getElementById('messages')
+            .insertAdjacentHTML('beforeend', `<div class="msg sent">🎤 Sending voice...</div>`);
+
+        await fetch('/send_attachment', {
+            method: 'POST',
+            body: formData
+        });
+
+        setTimeout(() => {
+            isSending = false;
+            refreshChat(true);
+        }, 1500);
+    };
+
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+}
+
+
     let contextMenuPhone=null;
     function showContextMenu(e,p) { e.preventDefault(); const m=document.getElementById('context-menu'); m.style.display='block'; m.style.left=e.pageX+'px'; m.style.top=e.pageY+'px'; contextMenuPhone=p; }
     window.addEventListener('click',()=>{document.getElementById('context-menu').style.display='none';});
@@ -534,6 +872,19 @@
     function getTickHtml(s) { if(!s)return''; let i='done',c='sent'; if(s==='delivered'){i='done_all';c='delivered';} else if(s==='read'){i='done_all';c='read';} return `<span class="material-icons tick ${c}">${i}</span>`; }
     function linkify(t) { if(!t)return""; let f=t.replace(/\n/g,'<br>'); return f.replace(/(?:\+|00|0)(?:92|3)\d{9,13}/g, m=>`<span class="phone-link" onclick="handleLinkClick('${m}')">${m}</span>`); }
     function handleLinkClick(n) { openChat(n.replace(/\D/g,''), null); }
+    // --- UI HELPER: TOGGLE SEND/MIC BUTTONS ---
+        function checkInput() {
+            const val = document.getElementById('msg-input').value.trim();
+            const isExpired = document.getElementById('msg-input').disabled;
+
+            // If session is expired, don't show buttons
+            if (isExpired) return;
+
+            // If text exists -> Show Send, Hide Mic
+            // If text empty  -> Hide Send, Show Mic
+            document.getElementById('send-btn').style.display = val ? 'block' : 'none';
+            document.getElementById('mic-btn').style.display = val ? 'none' : 'block';
+        }
 </script>
 </body>
 </html>
