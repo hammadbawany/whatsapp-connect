@@ -1281,7 +1281,7 @@ def download_whatsapp_media(media_id):
     return media_resp.content, content_type
 
 # 2. Universal Attachment Handler (Images, Video, Audio, Docs)
-'''
+
 @app.route("/send_attachment", methods=["POST"])
 def send_attachment():
     try:
@@ -1290,88 +1290,126 @@ def send_attachment():
         file = request.files.get("file")
         msg_type = request.form.get("type", "image")
 
-        if not phone or not file: return jsonify({"error": "missing data"}), 400
+        if not phone or not file:
+            return jsonify({"error": "missing data"}), 400
 
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+
+        cur.execute("""
+            SELECT id, phone_number_id, access_token
+            FROM whatsapp_accounts
+            WHERE waba_id = %s
+            LIMIT 1
+        """, (TARGET_WABA_ID,))
         acc = cur.fetchone()
 
         if not acc:
-            cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            cur.execute("""
+                SELECT id, phone_number_id, access_token
+                FROM whatsapp_accounts
+                ORDER BY id DESC LIMIT 1
+            """)
             acc = cur.fetchone()
 
         cur.close(); conn.close()
-        if not acc: return jsonify({"error": "No account"}), 400
 
-        # Read file content
-        file_content = file.read()
-        if len(file_content) < 100: return jsonify({"error": "Empty file"}), 400
+        if not acc:
+            return jsonify({"error": "No WhatsApp account"}), 400
 
-        # 🟢 FIX: VOICE NOTE FORMATTING
-        # Chrome records in WebM/Opus. WhatsApp accepts Opus if labeled as OGG/Opus.
-        # We rename to .opus and set the specific codec header.
+        file_bytes = file.read()
+        if len(file_bytes) < 100:
+            return jsonify({"error": "File too small"}), 400
+
+        print("🎧 Incoming upload")
+        print("Filename:", file.filename)
+        print("Content-Type:", file.mimetype)
+        print("Size:", len(file_bytes))
+
+        # 🟢 AUDIO FIX (CRITICAL)
         if msg_type == "audio":
-            ogg_bytes = convert_webm_to_ogg(file_content)
-
+            ogg_bytes = convert_webm_to_ogg(file_bytes)
             files = {
-                "file": (
-                    "voice.ogg",
-                    ogg_bytes,
-                    "audio/ogg"
-                )
+                "file": ("voice.ogg", ogg_bytes, "audio/ogg; codecs=opus")
             }
             caption = ""
         else:
             files = {
-                "file": (file.filename, file_content, file.mimetype)
+                "file": (file.filename, file_bytes, file.mimetype)
             }
-
-        # Upload
-        print("🎧 Incoming upload:")
-        print("Filename:", file.filename)
-        print("Content-Type:", file.mimetype)
-        print("Size:", len(file_content))
 
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
-        print(f"📤 Uploading {msg_type}...", file=sys.stdout)
-        up_resp = requests.post(upload_url, headers=headers, files=files, data={"messaging_product": "whatsapp"}).json()
+        up_resp = requests.post(
+            upload_url,
+            headers=headers,
+            files=files,
+            data={"messaging_product": "whatsapp"}
+        ).json()
+
+        print("📤 Meta upload response:", up_resp)
 
         media_id = up_resp.get("id")
         if not media_id:
-            print("❌ Upload Error:", up_resp, file=sys.stdout)
             return jsonify(up_resp), 500
 
-        # Send
-        msg_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
-        payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": media_id}}
-        if msg_type in ['image', 'video', 'document'] and caption: payload[msg_type]["caption"] = caption
+        send_payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": msg_type,
+            msg_type: {"id": media_id}
+        }
 
-        send_resp = requests.post(msg_url, json=payload, headers={"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}).json()
+        if caption and msg_type in ["image", "video", "document"]:
+            send_payload[msg_type]["caption"] = caption
 
-        if "messages" not in send_resp:
-            print("❌ Send Error:", send_resp, file=sys.stdout)
-            return jsonify(send_resp), 400
+        send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        send_resp = requests.post(
+            send_url,
+            headers={
+                "Authorization": f"Bearer {acc['access_token']}",
+                "Content-Type": "application/json"
+            },
+            json=send_payload
+        ).json()
 
-        wa_id = send_resp["messages"][0]["id"]
-
-        # Save
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
-            VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
-        """, (acc['id'], phone, msg_type, media_id, caption, wa_id))
-        conn.commit(); cur.close(); conn.close()
-        print("📤 Meta upload response:", up_resp)
         print("📨 Meta send response:", send_resp)
+
+        wa_id = send_resp.get("messages", [{}])[0].get("id")
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                media_type,
+                media_id,
+                message,
+                whatsapp_id,
+                status,
+                timestamp
+            )
+            VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
+        """, (
+            acc["id"],
+            phone,
+            msg_type,
+            media_id,
+            caption,
+            wa_id
+        ))
+        conn.commit()
+        cur.close(); conn.close()
+
         return jsonify({"success": True})
 
     except Exception as e:
-        print("❌ Exception:", e)
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 '''
 
 @app.route("/send_attachment", methods=["POST"])
@@ -1460,7 +1498,7 @@ def send_attachment():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
+'''
 
         # 3. Add Tag (For Filtering)
 @app.route("/set_tag", methods=["POST"])
