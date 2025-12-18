@@ -2518,6 +2518,58 @@ def upload_media_to_r2(media_id):
 def upload_audio_to_r2(media_id, token):
     import requests
     import os
+    # Ensure you import your R2 client generator here
+    # (Assuming this exists based on your other route snippet)
+    from r2_client import get_r2_client
+
+    # 1️⃣ Get media URL from Meta
+    meta = requests.get(
+        f"https://graph.facebook.com/v20.0/{media_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10
+    ).json()
+
+    media_url = meta.get("url")
+    if not media_url:
+        raise Exception("Meta media URL not found")
+
+    # 2️⃣ Download audio from Meta
+    audio_resp = requests.get(
+        media_url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20
+    )
+
+    audio_bytes = audio_resp.content
+    if not audio_bytes:
+        raise Exception("Downloaded audio is empty")
+
+    # 3️⃣ Prepare R2 key
+    key = f"media/audio/{media_id}.ogg"
+
+    # 4️⃣ Direct Upload using Boto3 (Fixes the SSL Error)
+    # We do NOT use generate_presigned_put here. We upload directly.
+    try:
+        r2 = get_r2_client() # Use the helper from your admin route
+
+        r2.put_object(
+            Bucket=os.environ["R2_BUCKET"], # Ensure this ENV var is set
+            Key=key,
+            Body=audio_bytes,
+            ContentType="audio/ogg"
+        )
+
+        print(f"[R2][SUCCESS] Direct upload successful key={key}")
+        return key
+
+    except Exception as e:
+        print(f"[R2][ERROR] Direct upload failed: {str(e)}")
+        raise e
+
+'''
+def upload_audio_to_r2(media_id, token):
+    import requests
+    import os
     from r2_client import generate_presigned_put
 
     # 1️⃣ Get media URL from Meta
@@ -2567,6 +2619,7 @@ def upload_audio_to_r2(media_id, token):
     print(f"[R2][SUCCESS] Uploaded via presigned PUT key={key}")
     return key
 
+'''
 def get_latest_whatsapp_token():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)

@@ -1,3 +1,4 @@
+'''
 import os
 import boto3
 from botocore.config import Config
@@ -31,3 +32,15 @@ def generate_presigned_put(key, content_type, expires=3600):
     )
 
     return url
+'''
+import boto3
+import os
+
+def get_r2_client():
+    return boto3.client(
+        's3',
+        endpoint_url=f"https://{os.environ['CLOUDFLARE_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
+        region_name="auto" # or 'us-east-1'
+    )
