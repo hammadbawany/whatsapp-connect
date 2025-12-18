@@ -1360,9 +1360,7 @@ def send_attachment():
         if not phone or not file:
             return jsonify({"error": "missing data"}), 400
 
-        # ─────────────────────────────────────────────
-        # 1️⃣ Fetch WhatsApp account
-        # ─────────────────────────────────────────────
+        # 1️⃣ Get WhatsApp account
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1383,25 +1381,24 @@ def send_attachment():
             """)
             acc = cur.fetchone()
 
+        cur.close()
+        conn.close()
+
         if not acc:
-            cur.close()
-            conn.close()
             return jsonify({"error": "No WhatsApp account"}), 400
 
-        # ─────────────────────────────────────────────
-        # 2️⃣ Prepare file
-        # ─────────────────────────────────────────────
+        # 2️⃣ Read file
         file_bytes = file.read()
         if len(file_bytes) < 100:
-            cur.close()
-            conn.close()
             return jsonify({"error": "File too small"}), 400
 
-        print("🎧 Incoming upload")
+        print("📎 Incoming attachment")
         print("Filename:", file.filename)
-        print("Content-Type:", file.mimetype)
+        print("Type:", msg_type)
         print("Size:", len(file_bytes))
 
+        # 3️⃣ Audio conversion (UNCHANGED)
+        ogg_bytes = None
         if msg_type == "audio":
             ogg_bytes = convert_webm_to_ogg(file_bytes)
             files = {
@@ -1413,9 +1410,7 @@ def send_attachment():
                 "file": (file.filename, file_bytes, file.mimetype)
             }
 
-        # ─────────────────────────────────────────────
-        # 3️⃣ Upload media to Meta
-        # ─────────────────────────────────────────────
+        # 4️⃣ Upload media to Meta (CRITICAL PATH)
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
@@ -1430,13 +1425,9 @@ def send_attachment():
 
         media_id = up_resp.get("id")
         if not media_id:
-            cur.close()
-            conn.close()
             return jsonify(up_resp), 500
 
-        # ─────────────────────────────────────────────
-        # 4️⃣ Send WhatsApp message
-        # ─────────────────────────────────────────────
+        # 5️⃣ Send WhatsApp message (CRITICAL PATH)
         send_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
@@ -1461,9 +1452,10 @@ def send_attachment():
 
         wa_id = send_resp.get("messages", [{}])[0].get("id")
 
-        # ─────────────────────────────────────────────
-        # 5️⃣ Save message to DB (agent message)
-        # ─────────────────────────────────────────────
+        # 6️⃣ Save message to DB (UNCHANGED BEHAVIOR)
+        conn = get_conn()
+        cur = conn.cursor()
+
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
@@ -1477,7 +1469,6 @@ def send_attachment():
                 timestamp
             )
             VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
-            RETURNING id
         """, (
             acc["id"],
             phone,
@@ -1487,31 +1478,19 @@ def send_attachment():
             wa_id
         ))
 
-        message_id = cur.fetchone()["id"]
-
-        # ─────────────────────────────────────────────
-        # 6️⃣ OPTIONAL: Best-effort R2 upload (NON-BLOCKING)
-        # ─────────────────────────────────────────────
-        r2_key = None
-        token = acc["access_token"]
-
-        try:
-            print(f"[R2] Attempting upload media_id={media_id}")
-            r2_key = upload_audio_to_r2(media_id, token)
-            print(f"[R2] Upload successful key={r2_key}")
-
-            save_media_location(message_id, r2_key)
-
-        except Exception as e:
-            print("[R2][NON-FATAL] Upload failed, continuing without R2")
-            print("[R2][ERROR]", str(e))
-
-        # ─────────────────────────────────────────────
-        # 7️⃣ Commit & close ONCE
-        # ─────────────────────────────────────────────
         conn.commit()
         cur.close()
         conn.close()
+
+        # 7️⃣ 🔵 NON-BLOCKING R2 UPLOAD VIA WORKER (AUDIO ONLY)
+        if msg_type == "audio" and ogg_bytes:
+            try:
+                print(f"[R2] Upload via Worker media_id={media_id}")
+                r2_key = upload_audio_via_worker(media_id, ogg_bytes)
+                print(f"[R2] Worker upload OK key={r2_key}")
+            except Exception as e:
+                print("[R2][NON-FATAL] Worker upload failed")
+                print("[R2][ERROR]", e)
 
         return jsonify({"success": True})
 
@@ -2517,31 +2496,23 @@ def upload_media_to_r2(media_id):
 
 def upload_audio_to_r2(media_id, token):
     import sys
-    # 🚨 LOG #1: IMMEDIATE ENTRY CHECK
-    print(f"\n🔥🔥🔥 [R2_ENTRY] Function called for ID: {media_id}", file=sys.stdout, flush=True)
+    import os
+    import requests
+    import boto3
+    import ssl
+    import mimetypes
+    from requests.adapters import HTTPAdapter
+    from urllib3.poolmanager import PoolManager
+    from botocore.config import Config
 
-    try:
-        # Imports moved INSIDE to catch failures
-        import os
-        import requests
-        import boto3
-        import ssl
-        from requests.adapters import HTTPAdapter
-        from urllib3.poolmanager import PoolManager
-        from botocore.config import Config
+    def log(msg):
+        print(f"🔥 [R2] {msg}", file=sys.stdout, flush=True)
 
-        print("🔥🔥🔥 [R2_IMPORTS] Libraries loaded successfully", file=sys.stdout, flush=True)
-
-    except Exception as e:
-        print(f"🔥🔥🔥 [R2_CRASH] Import Failed: {e}", file=sys.stdout, flush=True)
-        raise e
-
-    # 🔧 DEFINE SSL ADAPTER (The Fix)
+    # 🛠️ SSL Fix for Heroku
     class LegacySSLAdapter(HTTPAdapter):
         def init_poolmanager(self, connections, maxsize, block=False):
             ctx = ssl.create_default_context()
             try:
-                # Force Lower Security Level (Fixes Handshake Error)
                 ctx.set_ciphers('DEFAULT@SECLEVEL=1')
             except Exception:
                 pass
@@ -2552,9 +2523,10 @@ def upload_audio_to_r2(media_id, token):
                 ssl_context=ctx
             )
 
-    # 1️⃣ Get Media URL
+    log(f"Processing Media ID: {media_id}")
+
     try:
-        print("🔥🔥🔥 [R2_STEP_1] Fetching URL...", file=sys.stdout, flush=True)
+        # 1️⃣ Get URL
         meta = requests.get(
             f"https://graph.facebook.com/v20.0/{media_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -2562,102 +2534,51 @@ def upload_audio_to_r2(media_id, token):
         ).json()
 
         media_url = meta.get("url")
+        # Fallback to 'mime_type' from Meta metadata if available
+        meta_mime = meta.get("mime_type")
+
         if not media_url:
-            raise Exception("No URL returned from Meta")
+            raise Exception("No URL found in Meta response")
 
-        # Download
-        audio_bytes = requests.get(
-            media_url,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20
-        ).content
-        print(f"🔥🔥🔥 [R2_STEP_2] Downloaded {len(audio_bytes)} bytes", file=sys.stdout, flush=True)
-
-    except Exception as e:
-        print(f"🔥🔥🔥 [R2_ERROR] Download failed: {e}", file=sys.stdout, flush=True)
-        raise e
-
-    # 2️⃣ Generate Link (Boto3 Offline)
-    try:
-        endpoint = os.environ.get('R2_ENDPOINT')
-        if endpoint and endpoint.endswith('/'): endpoint = endpoint[:-1]
-
-        s3_signer = boto3.client(
-            's3',
-            endpoint_url=endpoint,
-            aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
-            config=Config(signature_version='s3v4'),
-            region_name='auto'
-        )
-
-        key = f"media/audio/{media_id}.ogg"
-        bucket = os.environ.get("R2_BUCKET")
-
-        upload_url = s3_signer.generate_presigned_url(
-            'put_object',
-            Params={'Bucket': bucket, 'Key': key, 'ContentType': 'audio/ogg'},
-            ExpiresIn=300
-        )
-    except Exception as e:
-        print(f"🔥🔥🔥 [R2_ERROR] Signing failed: {e}", file=sys.stdout, flush=True)
-        raise e
-
-    # 3️⃣ Upload (Requests + Adapter)
-    try:
-        print("🔥🔥🔥 [R2_STEP_3] Uploading...", file=sys.stdout, flush=True)
-        session = requests.Session()
-        session.mount('https://', LegacySSLAdapter())
-
-        res = session.put(
-            upload_url,
-            data=audio_bytes,
-            headers={'Content-Type': 'audio/ogg'},
-            timeout=30
-        )
-
-        if res.status_code not in [200, 201, 204]:
-            raise Exception(f"R2 Status {res.status_code}: {res.text}")
-
-        print(f"🔥🔥🔥 [R2_SUCCESS] Uploaded: {key}", file=sys.stdout, flush=True)
-        return key
-
-    except Exception as e:
-        print(f"🔥🔥🔥 [R2_ERROR] Upload failed: {e}", file=sys.stdout, flush=True)
-        raise e
-    # Helper for logs
-    def log(msg):
-        print(f"\n🚀 [R2_FIX] {msg}", file=sys.stdout)
-        sys.stdout.flush()
-
-    log(f"Starting Process for ID: {media_id}")
-
-    # 1️⃣ Get media URL from Meta (Standard requests)
-    try:
-        meta = requests.get(
-            f"https://graph.facebook.com/v20.0/{media_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10
-        ).json()
-        media_url = meta.get("url")
-        if not media_url:
-            raise Exception("Meta URL not found")
-
-        # Download Audio
+        # 2️⃣ Download
         audio_resp = requests.get(
             media_url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=20
         )
-        audio_bytes = audio_resp.content
-        log(f"✅ Downloaded {len(audio_bytes)} bytes from Meta")
-    except Exception as e:
-        log(f"❌ Failed to download from Meta: {e}")
-        raise e
 
-    # 2️⃣ Generate Presigned URL (OFFLINE - Boto3)
-    # We use boto3 ONLY to sign the URL, avoiding the network handshake entirely.
-    try:
+        # 🕵️ DETECT REAL CONTENT TYPE
+        content_type = audio_resp.headers.get("Content-Type")
+
+        # If headers are generic, use the metadata from Step 1
+        if not content_type or content_type == 'application/octet-stream':
+            content_type = meta_mime or "audio/ogg"
+
+        # Check for non-audio junk
+        if "json" in content_type or "text" in content_type or "html" in content_type:
+            log(f"❌ Error: Meta returned {content_type} instead of audio.")
+            log(f"Body: {audio_resp.text}")
+            raise Exception("Invalid file content (not audio)")
+
+        audio_bytes = audio_resp.content
+        if len(audio_bytes) < 100:
+            raise Exception(f"File too small ({len(audio_bytes)} bytes). Likely an error.")
+
+        # 3️⃣ Determine Extension
+        # Default to .ogg, but change if it's mp4/aac/mp3
+        ext = ".ogg"
+        if "mp4" in content_type:
+            ext = ".mp4"
+        elif "mpeg" in content_type or "mp3" in content_type:
+            ext = ".mp3"
+        elif "aac" in content_type:
+            ext = ".aac"
+        elif "amr" in content_type:
+            ext = ".amr"
+
+        log(f"✅ Detected Type: {content_type} -> Extension: {ext}")
+
+        # 4️⃣ Generate URL (Offline)
         endpoint = os.environ.get('R2_ENDPOINT')
         if endpoint and endpoint.endswith('/'): endpoint = endpoint[:-1]
 
@@ -2670,46 +2591,43 @@ def upload_audio_to_r2(media_id, token):
             region_name='auto'
         )
 
-        key = f"media/audio/{media_id}.ogg"
+        # Use the dynamic extension
+        key = f"media/audio/{media_id}{ext}"
 
         upload_url = s3_signer.generate_presigned_url(
             'put_object',
             Params={
                 'Bucket': os.environ.get("R2_BUCKET"),
                 'Key': key,
-                'ContentType': 'audio/ogg'
+                'ContentType': content_type # 🚨 CRITICAL: Tell R2 the real type
             },
             ExpiresIn=300
         )
-        log("✅ Generated Presigned URL successfully")
-    except Exception as e:
-        log(f"❌ Failed to sign URL: {e}")
-        raise e
 
-    # 3️⃣ Upload using Requests + Custom Adapter (The Fix)
-    try:
+        # 5️⃣ Upload
         session = requests.Session()
-        # Mount our custom adapter that forces compatible ciphers
         session.mount('https://', LegacySSLAdapter())
 
-        log("Attempting Upload with Custom SSL Context...")
-        res = session.put(
+        r2_resp = session.put(
             upload_url,
             data=audio_bytes,
-            headers={'Content-Type': 'audio/ogg'},
+            headers={'Content-Type': content_type}, # 🚨 Match header
             timeout=30
         )
 
-        if res.status_code not in [200, 201, 204]:
-            raise Exception(f"Status {res.status_code}: {res.text}")
+        if r2_resp.status_code not in [200, 201, 204]:
+            raise Exception(f"Upload failed: {r2_resp.status_code}")
 
-        log(f"✅✅✅ UPLOAD SUCCESSFUL! Key: {key}")
+        log(f"✅✅✅ Uploaded successfully: {key}")
+
+        # Return the key so your database saves the correct extension
         return key
 
     except Exception as e:
-        log(f"❌❌❌ UPLOAD FAILED: {e}")
+        log(f"❌ FATAL: {e}")
         raise e
-'''
+
+        '''
 def upload_audio_to_r2(media_id, token):
     import requests
     import os
@@ -2782,3 +2700,24 @@ def get_latest_whatsapp_token():
         raise Exception("No WhatsApp access token found")
 
     return row["access_token"]
+
+
+def upload_audio_via_worker(media_id, ogg_bytes):
+    url = f"{os.environ['WORKER_UPLOAD_BASE']}/media/audio/{media_id}.ogg"
+
+    headers = {
+        "Content-Type": "audio/ogg",
+        "x-upload-secret": os.environ["WORKER_UPLOAD_SECRET"],
+    }
+
+    resp = requests.put(
+        url,
+        data=ogg_bytes,
+        headers=headers,
+        timeout=15
+    )
+
+    if resp.status_code != 200:
+        raise Exception(f"Worker upload failed: {resp.text}")
+
+    return f"media/audio/{media_id}.ogg"
