@@ -1286,37 +1286,56 @@ def get_r2_key_for_media(media_id):
 
 @app.route("/media/<media_id>")
 def stream_media(media_id):
-    from flask import redirect, request, Response
     import requests
+    from flask import Response, stream_with_context, request
 
-    # 1️⃣ Check DB for R2 key
-    r2_key = get_r2_key_for_media(media_id)
-
-    if r2_key:
-        r2_url = f"{os.environ['R2_PUBLIC_BASE']}/{r2_key}"
-        return redirect(r2_url, code=302)
-
-    # 2️⃣ FALLBACK → existing Meta streaming (UNCHANGED)
     token = get_latest_whatsapp_token()
+    if not token:
+        return "No token", 401
 
-    meta_resp = requests.get(
+    meta = requests.get(
         f"https://graph.facebook.com/v20.0/{media_id}",
-        headers={"Authorization": f"Bearer {token}"}
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10
     ).json()
 
-    media_url = meta_resp.get("url")
+    media_url = meta.get("url")
     if not media_url:
         return "Media not found", 404
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    # 🚨 CRITICAL FOR DESKTOP AUDIO
     if "Range" in request.headers:
         headers["Range"] = request.headers["Range"]
 
-    r = requests.get(media_url, headers=headers, stream=True)
+    r = requests.get(
+        media_url,
+        headers=headers,
+        stream=True,
+        timeout=30
+    )
+
+    # 🚨 FORCE correct audio MIME
+    content_type = r.headers.get("Content-Type", "")
+    if "audio" not in content_type:
+        content_type = "audio/ogg"
+
+    response_headers = {
+        "Content-Type": content_type,
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",  # 🚨 REQUIRED
+    }
+
+    if "Content-Range" in r.headers:
+        response_headers["Content-Range"] = r.headers["Content-Range"]
+
     return Response(
-        r.iter_content(chunk_size=8192),
+        stream_with_context(r.iter_content(chunk_size=8192)),
         status=r.status_code,
-        headers=dict(r.headers),
+        headers=response_headers
     )
 
 
