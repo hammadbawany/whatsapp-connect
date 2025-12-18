@@ -1254,6 +1254,31 @@ def get_media(media_id):
         sys.stdout.flush()
         return "", 500
 '''
+def get_r2_key_for_media(media_id):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT r2_key
+            FROM whatsapp_media
+            WHERE media_id = %s
+            LIMIT 1
+        """, (media_id,))
+
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if row and row[0]:
+            return row[0]
+
+        return None
+
+    except Exception as e:
+        print("[R2][WARN] Failed to fetch r2_key:", e)
+        return None
+
 
 @app.route("/media/<media_id>")
 def stream_media(media_id):
