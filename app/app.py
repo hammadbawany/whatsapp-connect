@@ -2525,17 +2525,16 @@ def upload_audio_to_r2(media_id, token):
     from urllib3.poolmanager import PoolManager
     from botocore.config import Config
 
-    # 🔧 1. Define a Custom SSL Adapter to fix Handshake Errors
+    # 🔧 Define a Custom Adapter to bypass Heroku's strict SSL
     class LegacySSLAdapter(HTTPAdapter):
         def init_poolmanager(self, connections, maxsize, block=False):
+            # Create a custom SSL context
             ctx = ssl.create_default_context()
-            # This is the MAGIC FIX for Heroku/R2 Handshake failures:
-            # It lowers the security level to allow broader cipher support.
+            # 🔓 LOWER SECURITY LEVEL to allow Cloudflare R2 Handshake
             try:
                 ctx.set_ciphers('DEFAULT@SECLEVEL=1')
             except Exception:
-                # Fallback for older OpenSSL versions
-                pass
+                pass # Fallback for older systems
 
             self.poolmanager = PoolManager(
                 num_pools=connections,
@@ -2544,6 +2543,93 @@ def upload_audio_to_r2(media_id, token):
                 ssl_context=ctx
             )
 
+    # Logging helper
+    def log(msg):
+        print(f"\n🚀 [R2_FIX] {msg}", file=sys.stdout)
+        sys.stdout.flush()
+
+    log(f"STARTING PROCESS FOR ID: {media_id}")
+
+    # 1️⃣ Get media URL from Meta
+    try:
+        meta = requests.get(
+            f"https://graph.facebook.com/v20.0/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        ).json()
+        media_url = meta.get("url")
+        if not media_url:
+            raise Exception("Meta URL not found")
+
+        # Download Audio
+        audio_resp = requests.get(
+            media_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20
+        )
+        audio_bytes = audio_resp.content
+        log(f"✅ Downloaded {len(audio_bytes)} bytes from Meta")
+    except Exception as e:
+        log(f"❌ Failed to download from Meta: {e}")
+        raise e
+
+    # 2️⃣ Generate Presigned URL (OFFLINE)
+    # We use boto3 ONLY to sign the URL. It does NOT connect to the internet here.
+    try:
+        endpoint = os.environ.get('R2_ENDPOINT')
+        if endpoint and endpoint.endswith('/'): endpoint = endpoint[:-1]
+
+        s3_signer = boto3.client(
+            's3',
+            endpoint_url=endpoint,
+            aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
+            config=Config(signature_version='s3v4'),
+            region_name='auto'
+        )
+
+        key = f"media/audio/{media_id}.ogg"
+        bucket = os.environ.get("R2_BUCKET")
+
+        # Generate the link
+        upload_url = s3_signer.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': bucket,
+                'Key': key,
+                'ContentType': 'audio/ogg'
+            },
+            ExpiresIn=300
+        )
+        log("✅ Generated Presigned URL successfully (Offline)")
+    except Exception as e:
+        log(f"❌ Failed to sign URL: {e}")
+        raise e
+
+    # 3️⃣ Upload using Requests + LegacySSLAdapter
+    try:
+        session = requests.Session()
+        # Mount the custom adapter to https://
+        session.mount('https://', LegacySSLAdapter())
+
+        log("🚀 Attempting Upload using Custom SSL Context...")
+
+        res = session.put(
+            upload_url,
+            data=audio_bytes,
+            headers={'Content-Type': 'audio/ogg'},
+            timeout=30
+        )
+
+        if res.status_code not in [200, 201, 204]:
+            raise Exception(f"R2 returned status {res.status_code}: {res.text}")
+
+        log(f"✅✅✅ UPLOAD SUCCESSFUL! Key: {key}")
+        return key
+
+    except Exception as e:
+        log(f"❌❌❌ UPLOAD FAILED: {e}")
+        raise e
     # Helper for logs
     def log(msg):
         print(f"\n🚀 [R2_FIX] {msg}", file=sys.stdout)
