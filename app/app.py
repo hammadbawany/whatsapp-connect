@@ -1200,7 +1200,7 @@ def send_design():
         traceback.print_exc()
         return jsonify({"error": "internal error"}), 500
 
-
+'''
 @app.route("/media/<media_id>")
 @login_required
 def get_media(media_id):
@@ -1251,6 +1251,78 @@ def get_media(media_id):
         traceback.print_exc()
         sys.stdout.flush()
         return "", 500
+'''
+
+@app.route("/media/<media_id>")
+def stream_media(media_id):
+    import requests
+    from flask import Response, stream_with_context, request
+
+    # 1️⃣ Get token
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT access_token
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    acc = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not acc:
+        return "No WhatsApp account", 404
+
+    token = acc["access_token"]
+
+    # 2️⃣ Get media URL from Meta
+    meta_meta = requests.get(
+        f"https://graph.facebook.com/v20.0/{media_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    ).json()
+
+    media_url = meta_meta.get("url")
+    if not media_url:
+        return "Media not found", 404
+
+    # 3️⃣ Forward Range header
+    headers = {"Authorization": f"Bearer {token}"}
+    if request.headers.get("Range"):
+        headers["Range"] = request.headers["Range"]
+
+    meta_stream = requests.get(
+        media_url,
+        headers=headers,
+        stream=True
+    )
+
+    # 4️⃣ STREAM — very small chunks
+    def generate():
+        for chunk in meta_stream.iter_content(chunk_size=2048):
+            if chunk:
+                yield chunk
+
+    # 5️⃣ FORCE correct status code
+    status_code = 206 if "Range" in headers else 200
+
+    response = Response(
+        stream_with_context(generate()),
+        status=status_code,
+        mimetype="audio/ogg"
+    )
+
+    # 6️⃣ REQUIRED HEADERS (THIS IS THE BIG FIX)
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["Content-Disposition"] = "inline"
+
+    if "Content-Length" in meta_stream.headers:
+        response.headers["Content-Length"] = meta_stream.headers["Content-Length"]
+
+    if "Content-Range" in meta_stream.headers:
+        response.headers["Content-Range"] = meta_stream.headers["Content-Range"]
+
+    return response
 
 
 def download_whatsapp_media(media_id):
@@ -2197,7 +2269,7 @@ def index():
     else:
         # 4. Not Connected -> Go to Onboarding
         return redirect(url_for("connect_page"))
-
+'''
 @app.route("/connect")
 @login_required
 def connect_page():
@@ -2210,7 +2282,30 @@ def connect_page():
 
     cur.close(); conn.close()
     return render_template("connect.html")
+'''
 
+@app.route("/connect")
+@login_required
+def connect_page():
+    review_mode = request.args.get("review") == "1"
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM whatsapp_accounts LIMIT 1")
+    already_connected = cur.fetchone() is not None
+    cur.close()
+    conn.close()
+
+    # Normal behavior (production)
+    if already_connected and not review_mode:
+        return redirect(url_for("inbox"))
+
+    # Review mode OR not connected
+    return render_template(
+        "connect.html",
+        already_connected=already_connected,
+        review_mode=review_mode
+    )
 
 # --- HELPER: NORMALIZE PHONE ---
 def normalize_phone(phone):
