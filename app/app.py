@@ -1474,6 +1474,11 @@ def send_attachment():
             caption,
             wa_id
         ))
+          # NEW: upload immediately
+        r2_key = upload_audio_to_r2(media_id, token)
+
+    # save r2_key in DB against this message
+        save_media_location(message_id, r2_key)
         conn.commit()
         cur.close(); conn.close()
 
@@ -2478,3 +2483,39 @@ def upload_media_to_r2(media_id):
         "bucket": os.environ["R2_BUCKET"],
         "key": key
     }
+
+def upload_audio_to_r2(media_id, token):
+    import os
+    import requests
+    from r2_client import get_r2_client
+
+    # 1️⃣ Get media URL from Meta
+    meta = requests.get(
+        f"https://graph.facebook.com/v20.0/{media_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10
+    ).json()
+
+    media_url = meta.get("url")
+    if not media_url:
+        raise Exception("Media URL not found")
+
+    # 2️⃣ Download audio
+    audio_resp = requests.get(
+        media_url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20
+    )
+
+    # 3️⃣ Upload to R2
+    r2 = get_r2_client()
+    key = f"media/audio/{media_id}.ogg"
+
+    r2.put_object(
+        Bucket=os.environ["R2_BUCKET"],
+        Key=key,
+        Body=audio_resp.content,
+        ContentType="audio/ogg"
+    )
+
+    return key
