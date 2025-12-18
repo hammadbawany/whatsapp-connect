@@ -2418,3 +2418,63 @@ def convert_webm_to_ogg(webm_bytes):
     os.unlink(out_path)
 
     return ogg_bytes
+
+
+@app.route("/admin/upload_media/<media_id>")
+def upload_media_to_r2(media_id):
+    import os
+    import requests
+    from r2_client import get_r2_client
+
+    # 1️⃣ Get WhatsApp token from DB (reuse your existing logic)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT access_token
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    acc = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not acc:
+        return "No WhatsApp token", 500
+
+    token = acc["access_token"]
+
+    # 2️⃣ Get media URL from Meta
+    meta = requests.get(
+        f"https://graph.facebook.com/v20.0/{media_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15
+    ).json()
+
+    media_url = meta.get("url")
+    if not media_url:
+        return "Media URL not found", 404
+
+    # 3️⃣ Download media from Meta
+    media_resp = requests.get(
+        media_url,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30
+    )
+
+    # 4️⃣ Upload to R2
+    r2 = get_r2_client()
+    key = f"media/voice/{media_id}.ogg"
+
+    r2.put_object(
+        Bucket=os.environ["R2_BUCKET"],
+        Key=key,
+        Body=media_resp.content,
+        ContentType="audio/ogg"
+    )
+
+    return {
+        "status": "uploaded",
+        "bucket": os.environ["R2_BUCKET"],
+        "key": key
+    }
