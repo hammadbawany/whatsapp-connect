@@ -2523,9 +2523,9 @@ def upload_media_to_r2(media_id):
     }
 
 def upload_audio_to_r2(media_id, token):
-    import os
     import requests
-    from r2_client import get_r2_client
+    import os
+    from r2_client import generate_presigned_put
 
     # 1️⃣ Get media URL from Meta
     meta = requests.get(
@@ -2536,24 +2536,40 @@ def upload_audio_to_r2(media_id, token):
 
     media_url = meta.get("url")
     if not media_url:
-        raise Exception("Media URL not found")
+        raise Exception("Meta media URL not found")
 
-    # 2️⃣ Download audio
+    # 2️⃣ Download audio from Meta
     audio_resp = requests.get(
         media_url,
         headers={"Authorization": f"Bearer {token}"},
         timeout=20
     )
 
-    # 3️⃣ Upload to R2
-    r2 = get_r2_client()
+    audio_bytes = audio_resp.content
+    if not audio_bytes:
+        raise Exception("Downloaded audio is empty")
+
+    # 3️⃣ Prepare R2 key
     key = f"media/audio/{media_id}.ogg"
 
-    r2.put_object(
-        Bucket=os.environ["R2_BUCKET"],
-        Key=key,
-        Body=audio_resp.content,
-        ContentType="audio/ogg"
+    # 4️⃣ Generate presigned PUT URL
+    put_url = generate_presigned_put(
+        key=key,
+        content_type="audio/ogg"
     )
 
+    # 5️⃣ Upload via HTTPS PUT (NO boto3 here)
+    put_resp = requests.put(
+        put_url,
+        data=audio_bytes,
+        headers={"Content-Type": "audio/ogg"},
+        timeout=20
+    )
+
+    if put_resp.status_code not in (200, 204):
+        raise Exception(
+            f"R2 PUT failed {put_resp.status_code}: {put_resp.text}"
+        )
+
+    print(f"[R2][SUCCESS] Uploaded via presigned PUT key={key}")
     return key
