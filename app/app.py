@@ -16,6 +16,7 @@ from flask import Response
 import traceback
 import subprocess
 TARGET_WABA_ID = "707727951897342"
+from r2_client import get_r2_client
 
 
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
@@ -2419,12 +2420,11 @@ def convert_webm_to_ogg(webm_bytes):
 
     return ogg_bytes
 
+print("UPLOAD ROUTE FILE LOADED")
 
 @app.route("/admin/upload_media/<media_id>")
 def upload_media_to_r2(media_id):
-    import os
-    import requests
-    from r2_client import get_r2_client
+    print("UPLOAD ROUTE FILE LOADED")
 
     # 1️⃣ Get WhatsApp token from DB (reuse your existing logic)
     conn = get_conn()
