@@ -18,7 +18,8 @@ import subprocess
 TARGET_WABA_ID = "707727951897342"
 from r2_client import get_r2_client
 
-
+print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
+print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
 print("BOOT PHONE:", os.getenv("WA_PHONE"))
 app = Flask(__name__)
@@ -1474,6 +1475,25 @@ def send_attachment():
             caption,
             wa_id
         ))
+        # 🔹 FIX: fetch WhatsApp token INSIDE this function
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT access_token
+            FROM whatsapp_accounts
+            ORDER BY id DESC
+            LIMIT 1
+        """)
+        acc = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not acc:
+            print("[R2][ERROR] No WhatsApp access token found")
+            return
+
+        token = acc["access_token"]
+
           # NEW: upload immediately
         r2_key = upload_audio_to_r2(media_id, token)
 
