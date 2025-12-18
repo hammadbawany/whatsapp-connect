@@ -2519,89 +2519,101 @@ def upload_audio_to_r2(media_id, token):
     import requests
     import boto3
     import os
+    import sys
     from botocore.config import Config
 
-    print(f"[R2] Starting upload for media_id={media_id}")
+    # Helper to print loud logs instantly
+    def log(msg):
+        print(f"\n🚀 [R2_DEBUG] {msg}", file=sys.stdout)
+        sys.stdout.flush()
+
+    log(f"========================================")
+    log(f"STARTING UPLOAD FOR MEDIA_ID: {media_id}")
+    log(f"========================================")
 
     # 1️⃣ Get media URL from Meta
-    # (We assume this part works as you didn't report errors here)
-    meta = requests.get(
-        f"https://graph.facebook.com/v20.0/{media_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=10,
-        verify=False # Force verify=False here too just in case
-    ).json()
+    try:
+        log("Fetching URL from Meta Graph API...")
+        meta = requests.get(
+            f"https://graph.facebook.com/v20.0/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        ).json()
 
-    media_url = meta.get("url")
-    if not media_url:
-        raise Exception("Meta media URL not found")
+        media_url = meta.get("url")
+        if not media_url:
+            log("❌ ERROR: Meta returned no URL. Response: " + str(meta))
+            raise Exception("Meta media URL not found")
+
+        log(f"✅ Got Media URL: {media_url[:50]}...")
+
+    except Exception as e:
+        log(f"❌ Failed at Step 1 (Get URL): {str(e)}")
+        raise e
 
     # 2️⃣ Download audio from Meta
-    audio_resp = requests.get(
-        media_url,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=20,
-        verify=False
-    )
-    audio_bytes = audio_resp.content
+    try:
+        log("Downloading audio bytes...")
+        audio_resp = requests.get(
+            media_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20
+        )
+        audio_bytes = audio_resp.content
 
-    if not audio_bytes:
-        raise Exception("Downloaded audio is empty")
+        if not audio_bytes:
+            log("❌ ERROR: Downloaded file is empty (0 bytes)")
+            raise Exception("Downloaded audio is empty")
 
-    # 3️⃣ GENERATE UPLOAD URL (Offline Operation - No Network Needed Here)
+        log(f"✅ Downloaded {len(audio_bytes)} bytes")
+
+    except Exception as e:
+        log(f"❌ Failed at Step 2 (Download): {str(e)}")
+        raise e
+
+    # 3️⃣ Prepare R2 Client
     endpoint = os.environ.get('R2_ENDPOINT')
+    bucket = os.environ.get("R2_BUCKET")
+
+    # Log config (masking keys)
+    log(f"Configuring R2 Client...")
+    log(f"Endpoint: {endpoint}")
+    log(f"Bucket: {bucket}")
+
     if endpoint and endpoint.endswith('/'):
         endpoint = endpoint[:-1]
 
-    bucket_name = os.environ.get("R2_BUCKET")
-    key = f"media/audio/{media_id}.ogg"
-
-    # Create client strictly for signing (no connection made yet)
-    s3_signer = boto3.client(
+    r2 = boto3.client(
         's3',
         endpoint_url=endpoint,
         aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
         aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
-        config=Config(signature_version='s3v4'),
+        config=Config(
+            signature_version='s3v4',
+            retries={'max_attempts': 3},
+            connect_timeout=10
+        ),
         region_name='auto'
     )
 
-    # Generate the URL
+    key = f"media/audio/{media_id}.ogg"
+
+    # 4️⃣ Direct Upload
     try:
-        upload_url = s3_signer.generate_presigned_url(
-            'put_object',
-            Params={
-                'Bucket': bucket_name,
-                'Key': key,
-                'ContentType': 'audio/ogg'
-            },
-            ExpiresIn=300
+        log(f"Attempting PUT object to Key: {key}")
+        r2.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=audio_bytes,
+            ContentType="audio/ogg"
         )
-        print(f"[R2] Generated presigned URL successfully")
-    except Exception as e:
-        print(f"[R2] Signing failed: {e}")
-        raise e
-
-    # 4️⃣ UPLOAD USING REQUESTS (Network Operation)
-    # We use requests here because it handles 'verify=False' more aggressively
-    try:
-        print("[R2] Uploading via requests...")
-        upload_response = requests.put(
-            upload_url,
-            data=audio_bytes,
-            headers={'Content-Type': 'audio/ogg'},
-            timeout=30,
-            verify=False  # <--- CRITICAL BYPASS
-        )
-
-        if upload_response.status_code not in [200, 201, 204]:
-            raise Exception(f"R2 responded with {upload_response.status_code}: {upload_response.text}")
-
-        print(f"[R2][SUCCESS] Upload successful key={key}")
+        log(f"========================================")
+        log(f"✅✅✅ UPLOAD SUCCESSFUL: {key}")
+        log(f"========================================")
         return key
 
     except Exception as e:
-        print(f"[R2][ERROR] Requests upload failed: {str(e)}")
+        log(f"❌❌❌ UPLOAD FAILED: {str(e)}")
         raise e
 '''
 def upload_audio_to_r2(media_id, token):
