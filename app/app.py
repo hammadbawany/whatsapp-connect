@@ -1286,65 +1286,94 @@ def get_r2_key_for_media(media_id):
 
 @app.route("/media/<media_id>")
 def stream_media(media_id):
-    import requests
-    from flask import Response, stream_with_context, request
+    try:
+        import requests
+        from flask import Response, stream_with_context, request
 
-    token = get_latest_whatsapp_token()
-    if not token:
-        return "No token", 401
+        # 🔑 Get latest WhatsApp token (SAFE)
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT access_token
+            FROM whatsapp_accounts
+            ORDER BY id DESC
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
 
-    meta = requests.get(
-        f"https://graph.facebook.com/v20.0/{media_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=10
-    ).json()
+        if not row:
+            return "No WhatsApp token", 401
 
-    media_url = meta.get("url")
-    if not media_url:
-        return "Media not found", 404
+        token = row["access_token"]
 
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
+        # 1️⃣ Ask Meta for media URL
+        meta_resp = requests.get(
+            f"https://graph.facebook.com/v20.0/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        ).json()
 
-    # 🚨 CRITICAL FOR DESKTOP AUDIO
-    if "Range" in request.headers:
-        headers["Range"] = request.headers["Range"]
+        media_url = meta_resp.get("url")
+        if not media_url:
+            return "Media not found", 404
 
-    r = requests.get(
-        media_url,
-        headers=headers,
-        stream=True,
-        timeout=30
-    )
+        # 2️⃣ Forward Range header (CRITICAL for browser audio)
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        if "Range" in request.headers:
+            headers["Range"] = request.headers["Range"]
 
-    # 🚨 FORCE correct audio MIME
-    content_type = r.headers.get("Content-Type", "")
-    if "audio" not in content_type:
-        content_type = "audio/ogg"
+        # 3️⃣ Stream from Meta
+        meta_stream = requests.get(
+            media_url,
+            headers=headers,
+            stream=True,
+            timeout=30
+        )
 
-    response_headers = {
-        "Content-Type": content_type,
-        "Accept-Ranges": "bytes",
-        "Access-Control-Allow-Origin": "*",  # 🚨 REQUIRED
-    }
+        # 4️⃣ Generator
+        def generate():
+            for chunk in meta_stream.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
 
-    if "Content-Range" in r.headers:
-        response_headers["Content-Range"] = r.headers["Content-Range"]
+        # 5️⃣ Status code
+        status_code = 206 if "Range" in headers else 200
 
-    content_type = meta_stream.headers.get(
-        "Content-Type",
-        "audio/ogg"
-    )
+        # 6️⃣ REAL content-type (IMPORTANT)
+        content_type = meta_stream.headers.get(
+            "Content-Type",
+            "audio/ogg"
+        )
 
-    response = Response(
-        stream_with_context(generate()),
-        status=status_code,
-        content_type=content_type
-    )
-    response.headers["Accept-Ranges"] = "bytes"
-    response.headers["Content-Disposition"] = "inline"
-    response.headers["Access-Control-Allow-Origin"] = "*"
+        # 7️⃣ Build response
+        response = Response(
+            stream_with_context(generate()),
+            status=status_code,
+            content_type=content_type
+        )
+
+        # 8️⃣ REQUIRED HEADERS FOR BROWSER AUDIO
+        response.headers["Accept-Ranges"] = "bytes"
+        response.headers["Content-Disposition"] = "inline"
+        response.headers["Access-Control-Allow-Origin"] = "*"
+
+        if "Content-Length" in meta_stream.headers:
+            response.headers["Content-Length"] = meta_stream.headers["Content-Length"]
+
+        if "Content-Range" in meta_stream.headers:
+            response.headers["Content-Range"] = meta_stream.headers["Content-Range"]
+
+        return response
+
+    except Exception as e:
+        import traceback
+        print("[MEDIA][ERROR]", str(e))
+        traceback.print_exc()
+        return "Media failed to load", 500
 
 
 def download_whatsapp_media(media_id):
