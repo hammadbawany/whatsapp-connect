@@ -2420,11 +2420,11 @@ def convert_webm_to_ogg(webm_bytes):
 
     return ogg_bytes
 
-print("UPLOAD ROUTE FILE LOADED")
+print("🔥🔥🔥 UPLOAD ROUTE FILE LOADED")
 
 @app.route("/admin/upload_media/<media_id>")
 def upload_media_to_r2(media_id):
-    print("UPLOAD ROUTE FILE LOADED")
+    print("🔥UPLOAD ROUTE FILE LOADED🔥🔥🔥 ")
 
     # 1️⃣ Get WhatsApp token from DB (reuse your existing logic)
     conn = get_conn()
