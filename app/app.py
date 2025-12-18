@@ -1367,6 +1367,9 @@ def send_attachment():
         if not phone or not file:
             return jsonify({"error": "missing data"}), 400
 
+        # ─────────────────────────────────────────────
+        # 1️⃣ Fetch WhatsApp account
+        # ─────────────────────────────────────────────
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1382,17 +1385,23 @@ def send_attachment():
             cur.execute("""
                 SELECT id, phone_number_id, access_token
                 FROM whatsapp_accounts
-                ORDER BY id DESC LIMIT 1
+                ORDER BY id DESC
+                LIMIT 1
             """)
             acc = cur.fetchone()
 
-        cur.close(); conn.close()
-
         if not acc:
+            cur.close()
+            conn.close()
             return jsonify({"error": "No WhatsApp account"}), 400
 
+        # ─────────────────────────────────────────────
+        # 2️⃣ Prepare file
+        # ─────────────────────────────────────────────
         file_bytes = file.read()
         if len(file_bytes) < 100:
+            cur.close()
+            conn.close()
             return jsonify({"error": "File too small"}), 400
 
         print("🎧 Incoming upload")
@@ -1400,7 +1409,6 @@ def send_attachment():
         print("Content-Type:", file.mimetype)
         print("Size:", len(file_bytes))
 
-        # 🟢 AUDIO FIX (CRITICAL)
         if msg_type == "audio":
             ogg_bytes = convert_webm_to_ogg(file_bytes)
             files = {
@@ -1412,6 +1420,9 @@ def send_attachment():
                 "file": (file.filename, file_bytes, file.mimetype)
             }
 
+        # ─────────────────────────────────────────────
+        # 3️⃣ Upload media to Meta
+        # ─────────────────────────────────────────────
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
@@ -1426,8 +1437,13 @@ def send_attachment():
 
         media_id = up_resp.get("id")
         if not media_id:
+            cur.close()
+            conn.close()
             return jsonify(up_resp), 500
 
+        # ─────────────────────────────────────────────
+        # 4️⃣ Send WhatsApp message
+        # ─────────────────────────────────────────────
         send_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
@@ -1452,8 +1468,9 @@ def send_attachment():
 
         wa_id = send_resp.get("messages", [{}])[0].get("id")
 
-        conn = get_conn()
-        cur = conn.cursor()
+        # ─────────────────────────────────────────────
+        # 5️⃣ Save message to DB (agent message)
+        # ─────────────────────────────────────────────
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
@@ -1467,6 +1484,7 @@ def send_attachment():
                 timestamp
             )
             VALUES (%s, %s, 'agent', %s, %s, %s, %s, 'sent', NOW())
+            RETURNING id
         """, (
             acc["id"],
             phone,
@@ -1475,32 +1493,32 @@ def send_attachment():
             caption,
             wa_id
         ))
-        # 🔹 FIX: fetch WhatsApp token INSIDE this function
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT access_token
-            FROM whatsapp_accounts
-            ORDER BY id DESC
-            LIMIT 1
-        """)
-        acc = cur.fetchone()
-        cur.close()
-        conn.close()
 
-        if not acc:
-            print("[R2][ERROR] No WhatsApp access token found")
-            return
+        message_id = cur.fetchone()["id"]
 
+        # ─────────────────────────────────────────────
+        # 6️⃣ OPTIONAL: Best-effort R2 upload (NON-BLOCKING)
+        # ─────────────────────────────────────────────
+        r2_key = None
         token = acc["access_token"]
 
-          # NEW: upload immediately
-        r2_key = upload_audio_to_r2(media_id, token)
+        try:
+            print(f"[R2] Attempting upload media_id={media_id}")
+            r2_key = upload_audio_to_r2(media_id, token)
+            print(f"[R2] Upload successful key={r2_key}")
 
-    # save r2_key in DB against this message
-        save_media_location(message_id, r2_key)
+            save_media_location(message_id, r2_key)
+
+        except Exception as e:
+            print("[R2][NON-FATAL] Upload failed, continuing without R2")
+            print("[R2][ERROR]", str(e))
+
+        # ─────────────────────────────────────────────
+        # 7️⃣ Commit & close ONCE
+        # ─────────────────────────────────────────────
         conn.commit()
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
 
         return jsonify({"success": True})
 
