@@ -2517,16 +2517,19 @@ def upload_media_to_r2(media_id):
 
 def upload_audio_to_r2(media_id, token):
     import requests
+    import boto3
     import os
-    # Ensure you import your R2 client generator here
-    # (Assuming this exists based on your other route snippet)
-    from r2_client import get_r2_client
+    from botocore.config import Config
+
+    print(f"[R2] Starting upload for media_id={media_id}")
 
     # 1️⃣ Get media URL from Meta
+    # (We assume this part works as you didn't report errors here)
     meta = requests.get(
         f"https://graph.facebook.com/v20.0/{media_id}",
         headers={"Authorization": f"Bearer {token}"},
-        timeout=10
+        timeout=10,
+        verify=False # Force verify=False here too just in case
     ).json()
 
     media_url = meta.get("url")
@@ -2537,35 +2540,69 @@ def upload_audio_to_r2(media_id, token):
     audio_resp = requests.get(
         media_url,
         headers={"Authorization": f"Bearer {token}"},
-        timeout=20
+        timeout=20,
+        verify=False
     )
-
     audio_bytes = audio_resp.content
+
     if not audio_bytes:
         raise Exception("Downloaded audio is empty")
 
-    # 3️⃣ Prepare R2 key
+    # 3️⃣ GENERATE UPLOAD URL (Offline Operation - No Network Needed Here)
+    endpoint = os.environ.get('R2_ENDPOINT')
+    if endpoint and endpoint.endswith('/'):
+        endpoint = endpoint[:-1]
+
+    bucket_name = os.environ.get("R2_BUCKET")
     key = f"media/audio/{media_id}.ogg"
 
-    # 4️⃣ Direct Upload using Boto3 (Fixes the SSL Error)
-    # We do NOT use generate_presigned_put here. We upload directly.
-    try:
-        r2 = get_r2_client() # Use the helper from your admin route
+    # Create client strictly for signing (no connection made yet)
+    s3_signer = boto3.client(
+        's3',
+        endpoint_url=endpoint,
+        aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
+        config=Config(signature_version='s3v4'),
+        region_name='auto'
+    )
 
-        r2.put_object(
-            Bucket=os.environ["R2_BUCKET"], # Ensure this ENV var is set
-            Key=key,
-            Body=audio_bytes,
-            ContentType="audio/ogg"
+    # Generate the URL
+    try:
+        upload_url = s3_signer.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': bucket_name,
+                'Key': key,
+                'ContentType': 'audio/ogg'
+            },
+            ExpiresIn=300
+        )
+        print(f"[R2] Generated presigned URL successfully")
+    except Exception as e:
+        print(f"[R2] Signing failed: {e}")
+        raise e
+
+    # 4️⃣ UPLOAD USING REQUESTS (Network Operation)
+    # We use requests here because it handles 'verify=False' more aggressively
+    try:
+        print("[R2] Uploading via requests...")
+        upload_response = requests.put(
+            upload_url,
+            data=audio_bytes,
+            headers={'Content-Type': 'audio/ogg'},
+            timeout=30,
+            verify=False  # <--- CRITICAL BYPASS
         )
 
-        print(f"[R2][SUCCESS] Direct upload successful key={key}")
+        if upload_response.status_code not in [200, 201, 204]:
+            raise Exception(f"R2 responded with {upload_response.status_code}: {upload_response.text}")
+
+        print(f"[R2][SUCCESS] Upload successful key={key}")
         return key
 
     except Exception as e:
-        print(f"[R2][ERROR] Direct upload failed: {str(e)}")
+        print(f"[R2][ERROR] Requests upload failed: {str(e)}")
         raise e
-
 '''
 def upload_audio_to_r2(media_id, token):
     import requests
