@@ -1332,11 +1332,19 @@ def stream_media(media_id):
     if "Content-Range" in r.headers:
         response_headers["Content-Range"] = r.headers["Content-Range"]
 
-    return Response(
-        stream_with_context(r.iter_content(chunk_size=8192)),
-        status=r.status_code,
-        headers=response_headers
+    content_type = meta_stream.headers.get(
+        "Content-Type",
+        "audio/ogg"
     )
+
+    response = Response(
+        stream_with_context(generate()),
+        status=status_code,
+        content_type=content_type
+    )
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["Content-Disposition"] = "inline"
+    response.headers["Access-Control-Allow-Origin"] = "*"
 
 
 def download_whatsapp_media(media_id):
