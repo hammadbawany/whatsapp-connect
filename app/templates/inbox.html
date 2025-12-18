@@ -599,10 +599,12 @@
                        ========================= */
                     if (m.media_id) {
                         if (m.media_type === 'audio' || m.media_type === 'voice') {
-                            content = `<<audio controls preload="metadata">
-  <source src="/media/${m.media_id}" type="audio/ogg">
-  Your browser does not support audio.
-</audio>`;
+                          content = `
+                          <audio controls preload="none" crossorigin="anonymous">
+                            <source src="/media/${m.media_id}" type="audio/ogg">
+                            Your browser does not support audio.
+                          </audio>
+                        `;
                         } else if (m.media_type === 'video') {
                             content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
                         } else if (m.media_type === 'document') {
