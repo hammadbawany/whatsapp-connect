@@ -2516,26 +2516,35 @@ def upload_media_to_r2(media_id):
     }
 
 def upload_audio_to_r2(media_id, token):
-    import requests
-    import boto3
-    import os
     import sys
-    import ssl
-    from requests.adapters import HTTPAdapter
-    from urllib3.poolmanager import PoolManager
-    from botocore.config import Config
+    # 🚨 LOG #1: IMMEDIATE ENTRY CHECK
+    print(f"\n🔥🔥🔥 [R2_ENTRY] Function called for ID: {media_id}", file=sys.stdout, flush=True)
 
-    # 🔧 Define a Custom Adapter to bypass Heroku's strict SSL
+    try:
+        # Imports moved INSIDE to catch failures
+        import os
+        import requests
+        import boto3
+        import ssl
+        from requests.adapters import HTTPAdapter
+        from urllib3.poolmanager import PoolManager
+        from botocore.config import Config
+
+        print("🔥🔥🔥 [R2_IMPORTS] Libraries loaded successfully", file=sys.stdout, flush=True)
+
+    except Exception as e:
+        print(f"🔥🔥🔥 [R2_CRASH] Import Failed: {e}", file=sys.stdout, flush=True)
+        raise e
+
+    # 🔧 DEFINE SSL ADAPTER (The Fix)
     class LegacySSLAdapter(HTTPAdapter):
         def init_poolmanager(self, connections, maxsize, block=False):
-            # Create a custom SSL context
             ctx = ssl.create_default_context()
-            # 🔓 LOWER SECURITY LEVEL to allow Cloudflare R2 Handshake
             try:
+                # Force Lower Security Level (Fixes Handshake Error)
                 ctx.set_ciphers('DEFAULT@SECLEVEL=1')
             except Exception:
-                pass # Fallback for older systems
-
+                pass
             self.poolmanager = PoolManager(
                 num_pools=connections,
                 maxsize=maxsize,
@@ -2543,38 +2552,32 @@ def upload_audio_to_r2(media_id, token):
                 ssl_context=ctx
             )
 
-    # Logging helper
-    def log(msg):
-        print(f"\n🚀 [R2_FIX] {msg}", file=sys.stdout)
-        sys.stdout.flush()
-
-    log(f"STARTING PROCESS FOR ID: {media_id}")
-
-    # 1️⃣ Get media URL from Meta
+    # 1️⃣ Get Media URL
     try:
+        print("🔥🔥🔥 [R2_STEP_1] Fetching URL...", file=sys.stdout, flush=True)
         meta = requests.get(
             f"https://graph.facebook.com/v20.0/{media_id}",
             headers={"Authorization": f"Bearer {token}"},
             timeout=10
         ).json()
+
         media_url = meta.get("url")
         if not media_url:
-            raise Exception("Meta URL not found")
+            raise Exception("No URL returned from Meta")
 
-        # Download Audio
-        audio_resp = requests.get(
+        # Download
+        audio_bytes = requests.get(
             media_url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=20
-        )
-        audio_bytes = audio_resp.content
-        log(f"✅ Downloaded {len(audio_bytes)} bytes from Meta")
+        ).content
+        print(f"🔥🔥🔥 [R2_STEP_2] Downloaded {len(audio_bytes)} bytes", file=sys.stdout, flush=True)
+
     except Exception as e:
-        log(f"❌ Failed to download from Meta: {e}")
+        print(f"🔥🔥🔥 [R2_ERROR] Download failed: {e}", file=sys.stdout, flush=True)
         raise e
 
-    # 2️⃣ Generate Presigned URL (OFFLINE)
-    # We use boto3 ONLY to sign the URL. It does NOT connect to the internet here.
+    # 2️⃣ Generate Link (Boto3 Offline)
     try:
         endpoint = os.environ.get('R2_ENDPOINT')
         if endpoint and endpoint.endswith('/'): endpoint = endpoint[:-1]
@@ -2591,28 +2594,20 @@ def upload_audio_to_r2(media_id, token):
         key = f"media/audio/{media_id}.ogg"
         bucket = os.environ.get("R2_BUCKET")
 
-        # Generate the link
         upload_url = s3_signer.generate_presigned_url(
             'put_object',
-            Params={
-                'Bucket': bucket,
-                'Key': key,
-                'ContentType': 'audio/ogg'
-            },
+            Params={'Bucket': bucket, 'Key': key, 'ContentType': 'audio/ogg'},
             ExpiresIn=300
         )
-        log("✅ Generated Presigned URL successfully (Offline)")
     except Exception as e:
-        log(f"❌ Failed to sign URL: {e}")
+        print(f"🔥🔥🔥 [R2_ERROR] Signing failed: {e}", file=sys.stdout, flush=True)
         raise e
 
-    # 3️⃣ Upload using Requests + LegacySSLAdapter
+    # 3️⃣ Upload (Requests + Adapter)
     try:
+        print("🔥🔥🔥 [R2_STEP_3] Uploading...", file=sys.stdout, flush=True)
         session = requests.Session()
-        # Mount the custom adapter to https://
         session.mount('https://', LegacySSLAdapter())
-
-        log("🚀 Attempting Upload using Custom SSL Context...")
 
         res = session.put(
             upload_url,
@@ -2622,13 +2617,13 @@ def upload_audio_to_r2(media_id, token):
         )
 
         if res.status_code not in [200, 201, 204]:
-            raise Exception(f"R2 returned status {res.status_code}: {res.text}")
+            raise Exception(f"R2 Status {res.status_code}: {res.text}")
 
-        log(f"✅✅✅ UPLOAD SUCCESSFUL! Key: {key}")
+        print(f"🔥🔥🔥 [R2_SUCCESS] Uploaded: {key}", file=sys.stdout, flush=True)
         return key
 
     except Exception as e:
-        log(f"❌❌❌ UPLOAD FAILED: {e}")
+        print(f"🔥🔥🔥 [R2_ERROR] Upload failed: {e}", file=sys.stdout, flush=True)
         raise e
     # Helper for logs
     def log(msg):
