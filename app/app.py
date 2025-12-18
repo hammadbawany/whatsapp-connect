@@ -1257,74 +1257,38 @@ def get_media(media_id):
 
 @app.route("/media/<media_id>")
 def stream_media(media_id):
+    from flask import redirect, request, Response
     import requests
-    from flask import Response, stream_with_context, request
 
-    # 1️⃣ Get token
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT access_token
-        FROM whatsapp_accounts
-        ORDER BY id DESC
-        LIMIT 1
-    """)
-    acc = cur.fetchone()
-    cur.close()
-    conn.close()
+    # 1️⃣ Check DB for R2 key
+    r2_key = get_r2_key_for_media(media_id)
 
-    if not acc:
-        return "No WhatsApp account", 404
+    if r2_key:
+        r2_url = f"{os.environ['R2_PUBLIC_BASE']}/{r2_key}"
+        return redirect(r2_url, code=302)
 
-    token = acc["access_token"]
+    # 2️⃣ FALLBACK → existing Meta streaming (UNCHANGED)
+    token = get_latest_whatsapp_token()
 
-    # 2️⃣ Get media URL from Meta
-    meta_meta = requests.get(
+    meta_resp = requests.get(
         f"https://graph.facebook.com/v20.0/{media_id}",
         headers={"Authorization": f"Bearer {token}"}
     ).json()
 
-    media_url = meta_meta.get("url")
+    media_url = meta_resp.get("url")
     if not media_url:
         return "Media not found", 404
 
-    # 3️⃣ Forward Range header
     headers = {"Authorization": f"Bearer {token}"}
-    if request.headers.get("Range"):
+    if "Range" in request.headers:
         headers["Range"] = request.headers["Range"]
 
-    meta_stream = requests.get(
-        media_url,
-        headers=headers,
-        stream=True
+    r = requests.get(media_url, headers=headers, stream=True)
+    return Response(
+        r.iter_content(chunk_size=8192),
+        status=r.status_code,
+        headers=dict(r.headers),
     )
-
-    # 4️⃣ STREAM — very small chunks
-    def generate():
-        for chunk in meta_stream.iter_content(chunk_size=2048):
-            if chunk:
-                yield chunk
-
-    # 5️⃣ FORCE correct status code
-    status_code = 206 if "Range" in headers else 200
-
-    response = Response(
-        stream_with_context(generate()),
-        status=status_code,
-        mimetype="audio/ogg"
-    )
-
-    # 6️⃣ REQUIRED HEADERS (THIS IS THE BIG FIX)
-    response.headers["Accept-Ranges"] = "bytes"
-    response.headers["Content-Disposition"] = "inline"
-
-    if "Content-Length" in meta_stream.headers:
-        response.headers["Content-Length"] = meta_stream.headers["Content-Length"]
-
-    if "Content-Range" in meta_stream.headers:
-        response.headers["Content-Range"] = meta_stream.headers["Content-Range"]
-
-    return response
 
 
 def download_whatsapp_media(media_id):
