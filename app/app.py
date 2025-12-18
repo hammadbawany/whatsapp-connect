@@ -1254,6 +1254,7 @@ def get_media(media_id):
         sys.stdout.flush()
         return "", 500
 '''
+'''
 def get_r2_key_for_media(media_id):
     try:
         conn = get_conn()
@@ -1278,7 +1279,10 @@ def get_r2_key_for_media(media_id):
     except Exception as e:
         print("[R2][WARN] Failed to fetch r2_key:", e)
         return None
-
+'''
+def get_r2_key_for_media(media_id):
+    # TEMP: disable R2 lookup safely
+    return None
 
 @app.route("/media/<media_id>")
 def stream_media(media_id):
@@ -2562,3 +2566,23 @@ def upload_audio_to_r2(media_id, token):
 
     print(f"[R2][SUCCESS] Uploaded via presigned PUT key={key}")
     return key
+
+def get_latest_whatsapp_token():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT access_token
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or not row.get("access_token"):
+        raise Exception("No WhatsApp access token found")
+
+    return row["access_token"]
