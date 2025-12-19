@@ -702,36 +702,6 @@ def history():
 
     return jsonify(results)
 '''
-
-'''
-@app.route("/send_text", methods=["POST"])
-def send_text():
-    data = request.json
-    phone = normalize_phone(data.get("phone"))
-
-    text = data.get("text")
-
-    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
-
-    # 🟢 HARDCODED: Get specific account
-    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
-    acc = cur.fetchone()
-
-    if not acc:
-        cur.close(); conn.close()
-        return jsonify({"error": f"WABA {TARGET_WABA_ID} not connected"}), 400
-
-    # ... (Rest of function remains exactly the same) ...
-    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
-    headers = {"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}
-    try:
-        resp = requests.post(url, json={"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": text}}, headers=headers).json()
-        wa_id = resp.get("messages", [{}])[0].get("id")
-        cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp) VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())", (acc['id'], phone, text, wa_id))
-        conn.commit(); cur.close(); conn.close()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 '''
 @app.route("/send_text", methods=["POST"])
 def send_text():
@@ -804,8 +774,96 @@ def send_text():
     conn.commit()
     cur.close(); conn.close()
 
-    return jsonify({"success": True})
+    return jsonify({
+        "success": True,
+        "whatsapp_id": wa_id,
+        "is_reply": bool(reply_to)
+    })
+'''
 
+@app.route("/send_text", methods=["POST"])
+def send_text():
+    data = request.json
+    phone = normalize_phone(data.get("phone"))
+    text = data.get("text")
+    reply_to = data.get("reply_to")  # may be None
+
+    # 🔒 Validate reply target
+    if reply_to and not reply_to.startswith("wamid."):
+        log("❌ INVALID REPLY TARGET (not a wamid)", reply_to)
+        reply_to = None
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # 🟢 FORCE TARGET WABA
+    cur.execute(
+        "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+        (TARGET_WABA_ID,)
+    )
+    acc = cur.fetchone()
+
+    if not acc:
+        cur.close(); conn.close()
+        return jsonify({"error": "No WhatsApp account"}), 400
+
+    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+    headers = {
+        "Authorization": f"Bearer {acc['access_token']}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    if reply_to:
+        payload["context"] = {"message_id": reply_to}
+
+    log("SEND_TEXT → PAYLOAD", payload)
+
+    resp = requests.post(url, headers=headers, json=payload)
+    resp_json = resp.json()
+
+    log("SEND_TEXT ← RESPONSE", resp_json)
+
+    messages = resp_json.get("messages")
+    wa_id = messages[0].get("id") if isinstance(messages, list) and messages else None
+
+    if not wa_id:
+        log("❌ NO WHATSAPP MESSAGE ID RETURNED", resp_json)
+
+    cur.execute("""
+        INSERT INTO messages (
+            whatsapp_account_id,
+            user_phone,
+            sender,
+            message,
+            whatsapp_id,
+            context_whatsapp_id,
+            status,
+            timestamp
+        )
+        VALUES (%s, %s, 'agent', %s, %s, %s, 'sent', NOW())
+    """, (
+        acc["id"],
+        phone,
+        text,
+        wa_id,
+        reply_to
+    ))
+
+    conn.commit()
+    cur.close(); conn.close()
+
+    return jsonify({
+        "success": True,
+        "whatsapp_id": wa_id,
+        "is_reply": bool(reply_to)
+    })
 
 
 @app.route("/send_media", methods=["POST"])
