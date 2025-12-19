@@ -7,6 +7,119 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+
+    /* Overall composer */
+    .composer {
+        background: #1f2c34;
+        padding: 8px;
+        border-top: 1px solid #2a3942;
+    }
+
+    .reply-bar-container {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+
+
+    /* make reply UI inside the bar align and not overflow */
+    .reply-ui { display:flex; align-items:center; gap:10px; }
+    .reply-preview-text, .reply-preview { max-width: 100%; }
+.reply-body {
+    flex: 1;
+    overflow: hidden;
+}
+
+.reply-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #25D366;
+}
+
+
+.reply-close {
+    cursor: pointer;
+    font-size: 16px;
+    color: #8696a0;
+}
+
+/* Input row */
+.input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #2a3942;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.input-row input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #e9edef;
+    font-size: 14px;
+}
+
+.icon {
+    cursor: pointer;
+    color: #8696a0;
+    font-size: 18px;
+}
+
+.icon.mic {
+    font-size: 20px;
+}
+
+
+    .context-menu {
+        position: absolute;
+        background: #1f2c34;
+        border-radius: 6px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        display: none;
+        z-index: 9999;
+        min-width: 140px;
+    }
+
+    .context-menu .menu-item {
+        padding: 10px 14px;
+        cursor: pointer;
+        font-size: 14px;
+    }
+
+    .context-menu .menu-item:hover {
+        background: #2a3942;
+    }
+
+    msg {
+        position: relative;
+    }
+
+    /* Default (received messages) */
+    .msg.received .msg-actions {
+        position: absolute;
+        top: 8px;
+        right: -18px;
+    }
+
+    /* Sent messages (You) */
+    .msg.sent .msg-actions {
+        position: absolute;
+        top: 8px;
+        left: -18px;
+    }
+
+    .msg-actions {
+        font-size: 14px;
+        cursor: pointer;
+        user-select: none;
+        color: #8696a0;
+        opacity: 1; /* always visible as you wanted */
+    }
+
+
     .reply-preview {
     display: flex;
     cursor: pointer;
@@ -34,16 +147,15 @@
     .reply-row {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
     }
 
     .reply-thumb {
-        width: 36px;
-        height: 36px;
+        width: 40px;
+        height: 40px;
         object-fit: cover;
         border-radius: 4px;
     }
-
     .reply-highlight {
     animation: replyFlash 1.2s ease;
       }
@@ -152,8 +264,16 @@
 
         .chat-media { max-width: 200px; max-height: 200px; width: auto; height: auto; object-fit: contain; border-radius: 6px; margin-top: 5px; cursor: pointer; background-color: rgba(0,0,0,0.1); }
 
-        #footer { min-height: 62px; background: var(--header-bg); padding: 5px 16px; display: flex; align-items: center; gap: 10px; z-index: 2; position: relative;}
-        .input-bar:disabled { opacity: 0.5; cursor: not-allowed; }
+        #footer {
+            min-height: 62px;
+            background: var(--header-bg);
+            padding: 5px 16px;
+            display: flex;
+            align-items: flex-end; /* 🔥 KEY FIX */
+            gap: 10px;
+            z-index: 2;
+            position: relative;
+        }        .input-bar:disabled { opacity: 0.5; cursor: not-allowed; }
         .input-bar {
             flex: 1; background: var(--input-bg); border-radius: 8px; padding: 10px 12px; color: #fff; border: none; outline: none; font-size: 15px; font-family: inherit; resize: none; height: 42px; overflow-y: hidden;
         }
@@ -248,24 +368,27 @@
             <span class="material-icons icon-btn" onclick="toggleEmoji()">sentiment_satisfied_alt</span>
             <span class="material-icons icon-btn" onclick="toggleAttach()">attach_file</span>
             <span class="material-icons icon-btn" style="color: #FFC107;" title="Quick Reply" onclick="toggleQuickReplies()">flash_on</span>
-            <textarea id="msg-input" class="input-bar" placeholder="Type a message (or / for replies)" rows="1" disabled></textarea>
+
+            <!-- composer-wrapper holds reply bar ABOVE the input and stretches to fill footer -->
+            <div class="composer-wrapper" style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                <div id="reply-bar" class="reply-bar-container" style="display:none; width:100%;"></div>
+
+                <textarea
+                    id="msg-input"
+                    class="input-bar"
+                    placeholder="Type a message (or / for replies)"
+                    rows="1"
+                    disabled>
+                </textarea>
+            </div>
+
             <button class="template-btn" onclick="openTemplateModal()">Template</button>
             <span class="material-icons icon-btn" id="send-btn" onclick="sendMessage()" style="display:none;">send</span>
             <span class="material-icons icon-btn" id="mic-btn" onclick="startRecording()">mic</span>
-            <div id="recording-ui">
-                <div class="rec-dot"></div><span id="rec-timer">0:00</span>
-                <span class="material-icons icon-btn" style="color:red; margin-left:auto;" onclick="stopRecording(false)">delete</span>
-                <span class="material-icons icon-btn" style="color:var(--accent);" onclick="stopRecording(true)">send</span>
-            </div>
+            <div id="recording-ui"> ... </div>
             <emoji-picker></emoji-picker>
-            <div class="attach-menu" id="attach-menu">
-                <div class="attach-opt" onclick="triggerUpload('image')"><span class="material-icons" style="color:#d3396d;">image</span> Photos & Videos</div>
-                <div class="attach-opt" onclick="triggerUpload('document')"><span class="material-icons" style="color:#5f66cd;">description</span> Document</div>
-            </div>
-            <div class="quick-reply-menu" id="quick-reply-menu">
-                <div id="qr-list-content"></div>
-                <div class="qr-manage-btn" onclick="openManageQRModal()">➕ Add / Manage Replies</div>
-            </div>
+            <div class="attach-menu" id="attach-menu"> ... </div>
+            <div class="quick-reply-menu" id="quick-reply-menu"> ... </div>
             <div id="slash-popup"></div>
         </footer>
     </main>
@@ -322,11 +445,19 @@
     </div>
 </div>
 <input type="file" id="hidden-file-input" style="display:none;">
+<div id="msg-context-menu" class="context-menu">
+    <div class="menu-item" data-action="reply">Reply</div>
+    <div class="menu-item" data-action="forward">Forward</div>
+    <div class="menu-item" data-action="delete">Delete</div>
+</div>
+
+
 
 <script>
     // --- STATE VARIABLES ---
 
-
+    let lastRenderedMessages = [];
+    let replyTarget = null;
     let isNavigatingToReply = false;
     let currentPhone = null;
     let chatHistoryTimer = null;
@@ -338,6 +469,22 @@
     let mediaRecorder, audioChunks, recStartTime, recTimerInt;
     let pendingFile = null, pendingFileType = null;
 
+    function findMessageByWamid(wamid) {
+      return lastRenderedMessages.find(m => m.whatsapp_id === wamid);
+    }
+
+    function parseServerTimestamp(ts) {
+        // Convert "YYYY-MM-DD HH:mm:ss" → ISO
+        if (ts && ts.includes(" ")) {
+            ts = ts.replace(" ", "T") + "Z";
+        }
+        return new Date(ts);
+    }
+
+    function within24Hours(dateObj) {
+        if (!dateObj || isNaN(dateObj)) return false;
+        return (Date.now() - dateObj.getTime()) <= (24 * 60 * 60 * 1000);
+    }
     // --- INITIALIZATION ---
     loadChats(); loadMyProfile(); loadQuickReplies();
     chatListTimer = setInterval(loadChats, 4000); // Poll chat list 4s
@@ -527,7 +674,7 @@
 
                 // 🔒 Always render chronologically (IMPORTANT)
                 msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
+                lastRenderedMessages = msgs; // ✅ correct place
                 // Update render tracker
                 lastRenderedCount = msgs.length;
 
@@ -549,7 +696,7 @@
                     /* =========================
                        📅 DATE DIVIDER (WhatsApp style)
                        ========================= */
-                    console.log('MSG:', m.message, 'REPLY_TO:', m.reply_to);
+                    //console.log('MSG:', m.message, 'REPLY_TO:', m.reply_to);
 
                     const msgDate = new Date(m.timestamp).toDateString();
 
@@ -578,7 +725,7 @@
 
                     // ⏱ Track user message time for 24h session logic
                     if (!isSent) {
-                        const ts = new Date(m.timestamp);
+                        const ts = parseServerTimestamp(m.timestamp);
                         if (!lastUserMsgTime || ts > lastUserMsgTime) {
                             lastUserMsgTime = ts;
                         }
@@ -705,11 +852,12 @@
 
 
 
-                    div.innerHTML = `
-                        ${replyHtml}
-                        ${content}
-                        <div class="msg-meta">${time} ${tickHtml}</div>
-                    `;
+                       div.innerHTML = `
+                       <span class="msg-actions">▾</span>
+                       ${replyHtml}
+                       ${content}
+                       <div class="msg-meta">${time} ${tickHtml}</div>
+                   `;
 
                     container.appendChild(div);
                 });
@@ -728,6 +876,7 @@
         }
 
     // --- GENERIC FUNCTIONS ---
+    /*
     async function sendMessage() {
         const txt = msgInput.value.trim(); if (!txt || !currentPhone) return;
         isSending = true; if (chatHistoryTimer) clearInterval(chatHistoryTimer);
@@ -738,6 +887,96 @@
         try { await fetch('/send_text', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({phone: currentPhone, text: txt}) }); } catch(e) {}
         setTimeout(() => { isSending = false; refreshChat(false); chatHistoryTimer = setInterval(refreshChat, 3000); }, 1500);
     }
+    */
+    async function sendMessage() {
+        const txt = msgInput.value.trim();
+        if (!txt || !currentPhone) return;
+
+        isSending = true;
+        if (chatHistoryTimer) clearInterval(chatHistoryTimer);
+
+        msgInput.value = '';
+        checkInput();
+
+        const container = document.getElementById('messages');
+
+        /* =========================
+           ↩️ OPTIMISTIC REPLY PREVIEW
+           ========================= */
+        let optimisticReplyHtml = '';
+
+        if (replyTarget) {
+            let preview = replyTarget.message
+                ? replyTarget.message.substring(0, 80)
+                : (replyTarget.media_type ? `Replying to ${replyTarget.media_type}` : 'Message');
+
+            optimisticReplyHtml = `
+                <div class="reply-preview">
+                    <div class="reply-bar"></div>
+                    <div class="reply-content">
+                        <div class="reply-author">
+                            ${replyTarget.sender === 'agent' ? 'You' : 'User'}
+                        </div>
+                        <div class="reply-text">${preview}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /* =========================
+           📨 OPTIMISTIC MESSAGE RENDER
+           ========================= */
+        container.insertAdjacentHTML(
+            'beforeend',
+            `
+            <div class="msg sent">
+                ${optimisticReplyHtml}
+                ${linkify(txt)}
+                <div class="msg-meta">Now ${getTickHtml('sent')}</div>
+            </div>
+            `
+        );
+
+        container.scrollTop = container.scrollHeight;
+
+        /* =========================
+           📡 SEND TO BACKEND
+           ========================= */
+        try {
+            const payload = {
+                phone: currentPhone,
+                text: txt
+            };
+
+            if (replyTarget && replyTarget.whatsapp_id) {
+                payload.reply_to = replyTarget.whatsapp_id;
+            }
+
+            await fetch('/send_text', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(payload)
+            });
+
+        } catch (e) {
+            console.error('Send failed', e);
+        }
+
+        /* =========================
+           🧹 CLEAR REPLY MODE (AFTER SEND)
+           ========================= */
+        clearReplyTarget();
+
+        /* =========================
+           🔄 RESTORE CHAT REFRESH
+           ========================= */
+        setTimeout(() => {
+            isSending = false;
+            refreshChat(false);
+            chatHistoryTimer = setInterval(refreshChat, 3000);
+        }, 1500);
+    }
+
     async function loadQuickReplies() { try { const r=await fetch('/quick_replies'); quickReplies=await r.json(); } catch(e){} }
     function toggleQuickReplies() { const m=document.getElementById('quick-reply-menu'); if(m.style.display==='flex') m.style.display='none'; else { renderQuickReplyMenu(); m.style.display='flex'; } }
     function renderQuickReplyMenu() { const l=document.getElementById('qr-list-content'); l.innerHTML = ''; if(quickReplies.length===0) l.innerHTML='No replies.'; quickReplies.forEach(qr=>{ const d=document.createElement('div'); d.className='qr-item'; d.innerHTML=`<strong>/${qr.shortcut}</strong> ${qr.message.substring(0,40)}...`; d.onclick=()=>insertQuickReply(qr.message); l.appendChild(d); }); }
@@ -1040,6 +1279,122 @@ async function stopRecording(send) {
                 dbg('Navigation finished');
             }, 1200);
         });
+        let contextMenuTargetMsg = null;
+
+        document.addEventListener('click', function (e) {
+            const arrow = e.target.closest('.msg-actions');
+            const menu = document.getElementById('msg-context-menu');
+
+            if (arrow) {
+                e.stopPropagation();
+
+                const msgDiv = arrow.closest('.msg');
+                contextMenuTargetMsg = msgDiv;
+
+                menu.style.display = 'block';
+                menu.style.top = `${arrow.getBoundingClientRect().bottom + window.scrollY}px`;
+                menu.style.left = `${arrow.getBoundingClientRect().left + window.scrollX - 100}px`;
+
+                return;
+            }
+
+            // click anywhere else closes menu
+            menu.style.display = 'none';
+        });
+        document.getElementById('msg-context-menu').addEventListener('click', function (e) {
+            const action = e.target.dataset.action;
+            if (!action || !contextMenuTargetMsg) return;
+
+            const wamid = contextMenuTargetMsg.dataset.wamid;
+            const msgObj = findMessageByWamid(wamid); // helper below
+
+            if (!msgObj) return;
+
+            if (action === 'reply') {
+                setReplyTarget(msgObj);
+            }
+
+            if (action === 'forward') {
+                alert('Forward coming soon');
+            }
+
+            if (action === 'delete') {
+                alert('Delete coming soon');
+            }
+
+            this.style.display = 'none';
+        });
+        function setReplyTarget(m) {
+            replyTarget = {
+                whatsapp_id: m.whatsapp_id,
+                sender: m.sender,
+                message: m.message,
+                media_type: m.media_type
+            };
+
+            showReplyBar(replyTarget);
+        }
+
+        // ⬇️ Focus input immediately (WhatsApp behavior)
+        const input = document.getElementById('msg-input');
+        if (input && !input.disabled) {
+            input.focus();
+        }
+
+        function showReplyBar(rt) {
+            const bar = document.getElementById('reply-bar');
+
+            let previewText = '';
+            let previewThumb = '';
+
+            if (rt.message) {
+                previewText = rt.message.substring(0, 80);
+            } else if (rt.media_type === 'image' && rt.media_id) {
+                previewText = 'Photo';
+                previewThumb = `
+                    <img
+                      src="/media/${rt.media_id}"
+                      class="reply-thumb"
+                      loading="lazy"
+                      onerror="this.style.display='none'"
+                    >
+                `;
+            } else if (rt.media_type === 'video') {
+                previewText = 'Video';
+            } else if (rt.media_type === 'audio' || rt.media_type === 'voice') {
+                previewText = '🎤 Voice message';
+            } else {
+                previewText = 'Message';
+            }
+
+            bar.innerHTML = `
+                <div class="reply-ui">
+                    <div class="reply-strip"></div>
+                    <div class="reply-body">
+                        <div class="reply-name">
+                            ${rt.sender === 'agent' ? 'You' : 'User'}
+                        </div>
+                        <div class="reply-row">
+                            ${previewThumb}
+                            <div class="reply-preview-text">${previewText}</div>
+                        </div>
+                    </div>
+                    <div class="reply-close" onclick="clearReplyTarget()">✕</div>
+                </div>
+            `;
+
+            bar.style.display = 'block';
+        }
+        function clearReplyTarget() {
+          replyTarget = null;
+
+          const bar = document.getElementById('reply-bar');
+          if (bar) {
+              bar.style.display = 'none';
+              bar.innerHTML = '';
+          }
+      }
+
 
 </script>
 </body>
