@@ -7,6 +7,53 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    .deleted-msg {
+    display: inline-block;
+    font-style: italic;
+    font-size: 13px;
+    color: #8696a0;
+    padding: 6px 10px;
+    background: #1f2c34;
+    border-radius: 8px;
+    animation: deletedFadeIn 180ms ease-out;
+}
+
+/* Smooth collapse animation */
+.msg.deleted {
+    animation: collapseMsg 160ms ease-out forwards;
+}
+
+/* Animations */
+@keyframes deletedFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-2px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes collapseMsg {
+    from {
+        opacity: 1;
+        max-height: 500px;
+    }
+    to {
+        opacity: 1;
+        max-height: 80px;
+    }
+}
+    .menu-divider {
+        height: 1px;
+        background: #2a3942;
+        margin: 6px 0;
+    }
+
+    .context-menu .danger {
+        color: #f15c6d;
+    }
 
     /* Overall composer */
     .composer {
@@ -366,8 +413,11 @@
 
         <footer id="footer">
             <span class="material-icons icon-btn" onclick="toggleEmoji()">sentiment_satisfied_alt</span>
-            <span class="material-icons icon-btn" onclick="toggleAttach()">attach_file</span>
-            <span class="material-icons icon-btn" style="color: #FFC107;" title="Quick Reply" onclick="toggleQuickReplies()">flash_on</span>
+            <span class="material-icons icon-btn"
+                  onclick="console.log('📎 ATTACH CLICKED'); toggleAttach(event)">
+              attach_file
+            </span>
+                        <span class="material-icons icon-btn" style="color: #FFC107;" title="Quick Reply" onclick="toggleQuickReplies()">flash_on</span>
 
             <!-- composer-wrapper holds reply bar ABOVE the input and stretches to fill footer -->
             <div class="composer-wrapper" style="flex:1; display:flex; flex-direction:column; gap:6px;">
@@ -385,11 +435,21 @@
             <button class="template-btn" onclick="openTemplateModal()">Template</button>
             <span class="material-icons icon-btn" id="send-btn" onclick="sendMessage()" style="display:none;">send</span>
             <span class="material-icons icon-btn" id="mic-btn" onclick="startRecording()">mic</span>
-            <div id="recording-ui"> ... </div>
-            <emoji-picker></emoji-picker>
-            <div class="attach-menu" id="attach-menu"> ... </div>
-            <div class="quick-reply-menu" id="quick-reply-menu"> ... </div>
-            <div id="slash-popup"></div>
+            <div id="recording-ui">
+       <div class="rec-dot"></div><span id="rec-timer">0:00</span>
+       <span class="material-icons icon-btn" style="color:red; margin-left:auto;" onclick="stopRecording(false)">delete</span>
+       <span class="material-icons icon-btn" style="color:var(--accent);" onclick="stopRecording(true)">send</span>
+   </div>
+        <emoji-picker></emoji-picker>
+            <div class="attach-menu" id="attach-menu">
+                <div class="attach-opt" onclick="triggerUpload('image')"><span class="material-icons" style="color:#d3396d;">image</span> Photos & Videos</div>
+                <div class="attach-opt" onclick="triggerUpload('document')"><span class="material-icons" style="color:#5f66cd;">description</span> Document</div>
+            </div>
+            <div class="quick-reply-menu" id="quick-reply-menu">
+                <div id="qr-list-content"></div> <!-- 🔥 REQUIRED -->
+                <div class="qr-manage-btn" onclick="openManageQRModal()">Manage replies</div>
+            </div>
+                        <div id="slash-popup"></div>
         </footer>
     </main>
 </div>
@@ -448,14 +508,21 @@
 <div id="msg-context-menu" class="context-menu">
     <div class="menu-item" data-action="reply">Reply</div>
     <div class="menu-item" data-action="forward">Forward</div>
-    <div class="menu-item" data-action="delete">Delete</div>
+
+    <div class="menu-divider"></div>
+
+    <div class="menu-item" data-action="delete-me">Delete for me</div>
+    <div class="menu-item danger" data-action="delete-everyone">Delete for everyone</div>
 </div>
 
 
 
 <script>
     // --- STATE VARIABLES ---
+    let locallyMarkedUnread = new Set();
 
+    const messageById = new Map();
+    let selectedMsg = null;
     let lastRenderedMessages = [];
     let replyTarget = null;
     let isNavigatingToReply = false;
@@ -468,6 +535,205 @@
     let lastUserMsgTime = null;
     let mediaRecorder, audioChunks, recStartTime, recTimerInt;
     let pendingFile = null, pendingFileType = null;
+
+    document.getElementById('msg-context-menu')
+        .addEventListener('click', async (e) => {
+
+        const item = e.target.closest('.menu-item');
+        if (!item || !selectedMsg) return;
+
+        const action = item.dataset.action;
+
+        switch (action) {
+            case 'reply':
+                setReplyTarget(selectedMsg);
+                break;
+
+            case 'forward':
+                forwardMessage(selectedMsg);
+                break;
+
+            case 'delete-me':
+                await deleteForMe(selectedMsg);
+                break;
+
+            case 'delete-everyone':
+                await deleteForEveryone(selectedMsg);
+                break;
+        }
+
+        closeContextMenu();
+    });
+    function forwardMessage(msg) {
+    clearReplyTarget();
+
+    const input = document.getElementById('msg-input');
+    input.value = msg.message || '';
+    input.focus();
+}
+async function deleteForMe(msg) {
+    console.log('[DELETE_FOR_ME] sending request for', msg);
+    try {
+        const res = await fetch('/delete_for_me', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: msg.id })
+        });
+
+        let json;
+        try { json = await res.json(); } catch(e) { json = null; }
+
+        console.log('[DELETE_FOR_ME] response', res.status, json);
+
+        if (!res.ok) {
+            const err = (json && json.error) ? json.error : `HTTP ${res.status}`;
+            console.error('[DELETE_FOR_ME] failed:', err);
+            alert('Delete failed: ' + err);
+            return;
+        }
+
+        // Update UI: prefer dataset msg-id then fallback to wamid
+        const dom = document.querySelector(`[data-msg-id="${msg.id}"]`)
+                  || document.querySelector(`[data-wamid="${msg.whatsapp_id}"]`);
+        if (dom) {
+            dom.classList.add('deleted');
+            dom.innerHTML = `<span class="deleted-msg">You deleted this message</span>`;
+        }
+
+        // Refresh to ensure server state/side-effects are visible
+        refreshChat(true);
+
+    } catch (err) {
+        console.error('[DELETE_FOR_ME] network error', err);
+        alert('Network error while deleting message');
+    }
+}
+
+async function deleteForEveryone(msg) {
+    console.log('[DELETE_FOR_EVERYONE] sending request for', msg);
+    try {
+        const res = await fetch('/delete_for_everyone', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: msg.id })
+        });
+
+        let json;
+        try { json = await res.json(); } catch(e) { json = null; }
+
+        console.log('[DELETE_FOR_EVERYONE] response', res.status, json);
+
+        if (!res.ok) {
+            const err = (json && json.error) ? json.error : `HTTP ${res.status}`;
+            console.error('[DELETE_FOR_EVERYONE] failed:', err);
+            alert('Delete for everyone failed: ' + err);
+            return;
+        }
+
+        // Update UI
+        const dom = document.querySelector(`[data-msg-id="${msg.id}"]`)
+                  || document.querySelector(`[data-wamid="${msg.whatsapp_id}"]`);
+        if (dom) {
+            dom.classList.add('deleted');
+            dom.innerHTML = `<span class="deleted-msg">This message was deleted for everyone</span>`;
+        }
+
+        refreshChat(true);
+
+    } catch (err) {
+        console.error('[DELETE_FOR_EVERYONE] network error', err);
+        alert('Network error while deleting message for everyone');
+    }
+}
+
+
+
+function canDeleteForEveryone(msg) {
+    const msgTime = new Date(msg.timestamp).getTime();
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+
+    return (now - msgTime) <= ONE_HOUR;
+}
+function canDeleteForEveryone(msg) {
+    if (!msg) return false;
+
+    // 1️⃣ Only messages sent by YOU
+    if (msg.sender !== 'agent') return false;
+
+    // 2️⃣ Must have WhatsApp message id
+    if (!msg.whatsapp_id) return false;
+
+    // 3️⃣ Must be within 1 hour
+    const msgTime = new Date(msg.timestamp).getTime();
+    const ONE_HOUR = 60 * 60 * 1000;
+
+    return (Date.now() - msgTime) <= ONE_HOUR;
+}
+
+function openContextMenu(event, el) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const bubble = el.closest('.msg');
+    if (!bubble) {
+        console.warn('[CONTEXT MENU] bubble not found');
+        return;
+    }
+
+    const msgId = bubble.dataset.msgId;
+    if (!msgId) {
+        console.warn('[CONTEXT MENU] msgId missing on bubble');
+        return;
+    }
+
+    selectedMsg = messageById.get(String(msgId));
+    if (!selectedMsg) {
+        console.warn('[CONTEXT MENU] message not found in map', msgId);
+        return;
+    }
+
+    console.log('[CONTEXT MENU OPEN]', selectedMsg);
+
+    const menu = document.getElementById('msg-context-menu');
+    if (!menu) {
+        console.error('[CONTEXT MENU] menu not found');
+        return;
+    }
+
+    menu.style.display = 'block';
+        // 🔒 WhatsApp rule: only agent messages can be deleted for everyone
+        // 🔒 WhatsApp-style guard: sender + time + wamid
+        const deleteEveryoneItem = menu.querySelector('[data-action="delete-everyone"]');
+
+        if (deleteEveryoneItem) {
+            if (canDeleteForEveryone(selectedMsg)) {
+                deleteEveryoneItem.style.display = 'block';
+            } else {
+                deleteEveryoneItem.style.display = 'none';
+            }
+        }
+
+        const rect = el.getBoundingClientRect();
+        const menuHeight = menu.offsetHeight;
+        const footer = document.getElementById('footer');
+        const footerTop = footer ? footer.getBoundingClientRect().top : window.innerHeight;
+
+        const spaceBelow = footerTop - rect.bottom;
+        const spaceAbove = rect.top;
+
+        if (spaceBelow < menuHeight && spaceAbove > menuHeight) {
+            // 🔼 Open ABOVE the message
+            menu.style.top = (rect.top - menuHeight) + 'px';
+        } else {
+            // 🔽 Open BELOW the message
+            menu.style.top = rect.bottom + 'px';
+        }
+
+        menu.style.left = rect.left + 'px';
+
+}
+
 
     function findMessageByWamid(wamid) {
       return lastRenderedMessages.find(m => m.whatsapp_id === wamid);
@@ -573,8 +839,13 @@
                 const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
 
                 // Unread Badge Logic
-                let unreadCount = c.unread_count;
-                if (currentPhone === c.phone) unreadCount = 0;
+                let unreadCount = c.unread_count || 0;
+
+                // 🔥 Allow manual unread even if chat is open
+                if (locallyMarkedUnread.has(c.phone)) {
+                    unreadCount = Math.max(unreadCount, 1);
+                }
+
                 const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
 
                 // Avatar Props
@@ -640,6 +911,7 @@
             document.getElementById('messages').innerHTML='<div style="text-align:center;padding:50px;">Loading...</div>';
 
             fetch('/mark_read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
+            locallyMarkedUnread.delete(phone);
 
             await refreshChat(true);
             chatHistoryTimer = setInterval(refreshChat, 3000);
@@ -647,13 +919,7 @@
 
         async function refreshChat(forceScroll = false) {
 
-              if (isNavigatingToReply) {
-                  dbg('refreshChat SKIPPED (navigating to reply)');
-                  return;
-              }
-
-              dbg('refreshChat START', { forceScroll, isNavigatingToReply });
-
+            dbg('refreshChat START', { forceScroll, isNavigatingToReply });
 
             // 🔒 Keep date tracking local to this render
             let lastRenderedDate = null;
@@ -672,17 +938,19 @@
                     return;
                 }
 
-                // 🔒 Always render chronologically (IMPORTANT)
+                // 🔒 Always render chronologically
                 msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-                lastRenderedMessages = msgs; // ✅ correct place
-                // Update render tracker
+
+                lastRenderedMessages = msgs;
                 lastRenderedCount = msgs.length;
 
                 const container = document.getElementById('messages');
+
                 dbg('DOM RESET (innerHTML wipe)', {
                     scrollTopBefore: container.scrollTop
                 });
-                // 🔒 Reset container (keeps your encryption banner)
+
+                // 🔒 Reset container (encryption banner stays)
                 container.innerHTML = `
                     <div style="text-align:center; margin:20px; color:#8696a0; font-size:12px;">
                         <span class="material-icons" style="font-size:12px;">lock</span>
@@ -693,11 +961,16 @@
                 lastUserMsgTime = null;
 
                 msgs.forEach(m => {
-                    /* =========================
-                       📅 DATE DIVIDER (WhatsApp style)
-                       ========================= */
-                    //console.log('MSG:', m.message, 'REPLY_TO:', m.reply_to);
 
+                    console.log('[RENDER MSG]', {
+                        id: m.id,
+                        whatsapp_id: m.whatsapp_id,
+                        message: m.message
+                    });
+
+                    /* =========================
+                       📅 DATE DIVIDER
+                       ========================= */
                     const msgDate = new Date(m.timestamp).toDateString();
 
                     if (msgDate !== lastRenderedDate) {
@@ -723,7 +996,9 @@
 
                     const isSent = m.sender === 'agent';
 
-                    // ⏱ Track user message time for 24h session logic
+                    /* =========================
+                       ⏱ Track last user message
+                       ========================= */
                     if (!isSent) {
                         const ts = parseServerTimestamp(m.timestamp);
                         if (!lastUserMsgTime || ts > lastUserMsgTime) {
@@ -731,51 +1006,89 @@
                         }
                     }
 
+                    /* =========================
+                       🧱 CREATE MESSAGE BUBBLE
+                       (MUST COME BEFORE USING div)
+                       ========================= */
                     const div = document.createElement('div');
                     div.className = `msg ${isSent ? 'sent' : 'received'}`;
-                    div.dataset.wamid = m.whatsapp_id;
 
+                    if (m.id) {
+                        div.dataset.msgId = m.id;
+                        messageById.set(String(m.id), m);   // 🔒 stable lookup for menu
+                    }
 
-                    // Optional future-proofing (no UI change)
-                    if (m.id) div.dataset.msgId = m.id;
+                    if (m.whatsapp_id) {
+                        div.dataset.wamid = m.whatsapp_id;
+                    }
 
                     let content = '';
 
                     /* =========================
-                       📎 MEDIA LOGIC (UNCHANGED)
+                       🗑️ DELETE LOGIC
                        ========================= */
-                    if (m.media_id) {
-                        if (m.media_type === 'audio' || m.media_type === 'voice') {
-                          content = `
-                          <audio controls preload="none" crossorigin="anonymous">
-                            <source src="/media/${m.media_id}" type="audio/ogg">
-                            Your browser does not support audio.
-                          </audio>
+                    if (m.deleted_for_everyone) {
+                        div.classList.add('deleted');
+                        content = `
+                            <div class="deleted-msg">
+                                ${m.sender === 'agent'
+                                    ? 'You deleted this message'
+                                    : 'This message was deleted'}
+                            </div>
                         `;
-                        } else if (m.media_type === 'video') {
-                            content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
-                        } else if (m.media_type === 'document') {
-                            content = `
-                                <div style="padding:10px;">
-                                    <a href="/media/${m.media_id}" target="_blank"
-                                       style="color:var(--primary-text);">
-                                       📄 Download Document
-                                    </a>
-                                </div>`;
-                        } else {
-                            content = `
-                                <img src="/media/${m.media_id}"
-                                     class="chat-media"
-                                     loading="lazy"
-                                     onclick="openImageViewer(this.src)">`;
-                        }
+                    }
+                    else if (m.deleted_for_me) {
+                        div.classList.add('deleted');
+                        content = `
+                            <div class="deleted-msg">
+                                ${m.sender === 'agent'
+                                    ? 'You deleted this message'
+                                    : 'This message was deleted'}
+                            </div>
+                        `;
+                    }
+                    else {
 
-                        if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
-                            content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+                        /* =========================
+                           📎 MEDIA / TEXT
+                           ========================= */
+                        if (m.media_id) {
+                            if (m.media_type === 'audio' || m.media_type === 'voice') {
+                                content = `
+                                    <audio controls preload="none" crossorigin="anonymous">
+                                        <source src="/media/${m.media_id}" type="audio/ogg">
+                                        Your browser does not support audio.
+                                    </audio>
+                                `;
+                            }
+                            else if (m.media_type === 'video') {
+                                content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+                            }
+                            else if (m.media_type === 'document') {
+                                content = `
+                                    <div style="padding:10px;">
+                                        <a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text);">
+                                            📄 Download Document
+                                        </a>
+                                    </div>
+                                `;
+                            }
+                            else {
+                                content = `
+                                    <img src="/media/${m.media_id}"
+                                         class="chat-media"
+                                         loading="lazy"
+                                         onclick="openImageViewer(this.src)">
+                                `;
+                            }
+
+                            if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
+                                content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+                            }
                         }
-                    } else {
-                        // 📝 TEXT
-                        content = linkify(m.message);
+                        else {
+                            content = linkify(m.message);
+                        }
                     }
 
                     const time = new Date(m.timestamp).toLocaleTimeString([], {
@@ -786,108 +1099,96 @@
                     const tickHtml = isSent ? getTickHtml(m.status) : '';
 
                     /* =========================
-                       ↩️ REPLY PREVIEW (SAFE)
+                       ↩️ REPLY PREVIEW
                        ========================= */
-                       let replyHtml = '';
+                    let replyHtml = '';
 
-                       if (m.reply_to) {
-                           let previewText = '';
-                           let previewThumb = '';
+                    if (m.reply_to) {
+                        let previewText = '';
+                        let previewThumb = '';
 
-                           // -------- Determine preview text --------
-                           if (m.reply_to.message) {
-                               previewText = m.reply_to.message.substring(0, 80);
-                           } else if (m.reply_to.media_type) {
-                               const mediaMap = {
-                                   image: '📷 Photo',
-                                   video: '🎥 Video',
-                                   audio: '🎵 Audio',
-                                   voice: '🎵 Voice message',
-                                   document: '📄 Document',
-                                   sticker: '🧩 Sticker'
-                               };
-                               previewText = mediaMap[m.reply_to.media_type] || '📎 Attachment';
-                           } else {
-                               previewText = 'Message';
-                           }
+                        if (m.reply_to.message) {
+                            previewText = m.reply_to.message.substring(0, 80);
+                        }
+                        else if (m.reply_to.media_type) {
+                            const mediaMap = {
+                                image: '📷 Photo',
+                                video: '🎥 Video',
+                                audio: '🎵 Audio',
+                                voice: '🎵 Voice message',
+                                document: '📄 Document',
+                                sticker: '🧩 Sticker'
+                            };
+                            previewText = mediaMap[m.reply_to.media_type] || '📎 Attachment';
+                        }
+                        else {
+                            previewText = 'Message';
+                        }
 
-                           // -------- Optional thumbnail --------
-                           if (
-                               (m.reply_to.media_type === 'image' || m.reply_to.media_type === 'video') &&
-                               m.reply_to.media_id
-                           ) {
-                               previewThumb = `
-                                 <img
-                                   src="/media/${m.reply_to.media_id}"
-                                   class="reply-thumb"
-                                   loading="lazy"
-                                   onerror="this.style.display='none'"
-                                 >
-                               `;
-                           }
+                        if (
+                            (m.reply_to.media_type === 'image' || m.reply_to.media_type === 'video') &&
+                            m.reply_to.media_id
+                        ) {
+                            previewThumb = `
+                                <img src="/media/${m.reply_to.media_id}"
+                                     class="reply-thumb"
+                                     loading="lazy"
+                                     onerror="this.style.display='none'">
+                            `;
+                        }
 
-                           // -------- IMPORTANT CHANGE --------
-                           // data-reply-id ONLY if whatsapp_id exists
-                           const replyAttr = m.reply_to.whatsapp_id
-                               ? `data-reply-id="${m.reply_to.whatsapp_id}"`
-                               : '';
+                        const replyAttr = m.reply_to.whatsapp_id
+                            ? `data-reply-id="${m.reply_to.whatsapp_id}"`
+                            : '';
 
-                           replyHtml = `
-                             <div class="reply-preview" ${replyAttr}>
-                               <div class="reply-bar"></div>
-                               <div class="reply-content">
-                                 <div class="reply-author">
-                                   ${m.reply_to.sender === 'agent' ? 'You' : 'User'}
-                                 </div>
-                                 <div class="reply-row">
-                                   ${previewThumb}
-                                   <div class="reply-text">${previewText}</div>
-                                 </div>
-                               </div>
-                             </div>
-                           `;
-                       }
+                        replyHtml = `
+                            <div class="reply-preview" ${replyAttr}>
+                                <div class="reply-bar"></div>
+                                <div class="reply-content">
+                                    <div class="reply-author">
+                                        ${m.reply_to.sender === 'agent' ? 'You' : 'User'}
+                                    </div>
+                                    <div class="reply-row">
+                                        ${previewThumb}
+                                        <div class="reply-text">${previewText}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
 
+                    /* =========================
+                       🧩 FINAL HTML
+                       ========================= */
+                    const isDeleted = m.deleted_for_me || m.deleted_for_everyone;
 
-
-
-
-                       div.innerHTML = `
-                       <span class="msg-actions">▾</span>
-                       ${replyHtml}
-                       ${content}
-                       <div class="msg-meta">${time} ${tickHtml}</div>
-                   `;
+                    div.innerHTML = `
+                        ${!isDeleted
+                            ? '<span class="msg-actions" onclick="openContextMenu(event, this)">▾</span>'
+                            : ''}
+                        ${replyHtml}
+                        ${content}
+                        <div class="msg-meta">${time} ${tickHtml}</div>
+                    `;
 
                     container.appendChild(div);
                 });
 
-                // ⬇️ Scroll behavior (UNCHANGED)
+
+                // ⬇️ Scroll behavior
                 if (forceScroll && !isNavigatingToReply) {
                     container.scrollTop = container.scrollHeight;
                 }
 
-                // ⏳ 24h session timer (UNCHANGED)
+                // ⏳ 24h session timer
                 updateSessionTimer();
 
-            } catch (e) {
-                console.log("Refresh skipped (Network Error or Server Busy)");
-            }
+              } catch (e) {
+                  console.error('❌ refreshChat crashed:', e);
+              }
         }
 
-    // --- GENERIC FUNCTIONS ---
-    /*
-    async function sendMessage() {
-        const txt = msgInput.value.trim(); if (!txt || !currentPhone) return;
-        isSending = true; if (chatHistoryTimer) clearInterval(chatHistoryTimer);
-        msgInput.value = ''; checkInput();
-        const container = document.getElementById('messages');
-        container.insertAdjacentHTML('beforeend', `<div class="msg sent">${linkify(txt)} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`);
-        container.scrollTop = container.scrollHeight;
-        try { await fetch('/send_text', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({phone: currentPhone, text: txt}) }); } catch(e) {}
-        setTimeout(() => { isSending = false; refreshChat(false); chatHistoryTimer = setInterval(refreshChat, 3000); }, 1500);
-    }
-    */
+
     async function sendMessage() {
         const txt = msgInput.value.trim();
         if (!txt || !currentPhone) return;
@@ -951,6 +1252,10 @@
             if (replyTarget && replyTarget.whatsapp_id) {
                 payload.reply_to = replyTarget.whatsapp_id;
             }
+            /* =========================
+               🧹 CLEAR REPLY MODE (AFTER SEND)
+               ========================= */
+            clearReplyTarget();
 
             await fetch('/send_text', {
                 method: 'POST',
@@ -962,10 +1267,7 @@
             console.error('Send failed', e);
         }
 
-        /* =========================
-           🧹 CLEAR REPLY MODE (AFTER SEND)
-           ========================= */
-        clearReplyTarget();
+
 
         /* =========================
            🔄 RESTORE CHAT REFRESH
@@ -1030,7 +1332,8 @@
     function updateSessionTimer() { const t=document.getElementById('session-timer'); const i=document.getElementById('msg-input'); if(!lastUserMsgTime){t.innerText="--";i.disabled=true;i.placeholder="24h session expired";return;} const r=(24*3600*1000)-(new Date()-lastUserMsgTime); if(r>0){ const h=Math.floor(r/3600000); const m=Math.floor((r%3600000)/60000); t.innerText=`${h}:${m<10?'0'+m:m}`; t.classList.remove('session-expired'); i.disabled=false; i.placeholder="Type a message"; } else { t.innerText="00:00"; t.classList.add('session-expired'); i.disabled=true; i.placeholder="Send a template."; } }
     function toggleEmoji() { document.querySelector('emoji-picker').style.display = document.querySelector('emoji-picker').style.display === 'flex' ? 'none' : 'flex'; }
     function toggleAttach() { document.getElementById('attach-menu').style.display = document.getElementById('attach-menu').style.display === 'flex' ? 'none' : 'flex'; }
-    function triggerUpload(t) { toggleAttach(); const input = document.getElementById('hidden-file-input'); input.accept = t==='image'?'image/*,video/*':'*/*'; input.onchange = (e) => prepareUpload(e.target.files[0],t); input.click(); }
+
+        function triggerUpload(t) { toggleAttach(); const input = document.getElementById('hidden-file-input'); input.accept = t==='image'?'image/*,video/*':'*/*'; input.onchange = (e) => prepareUpload(e.target.files[0],t); input.click(); }
     function prepareUpload(f,t) { if(!f||!currentPhone)return; pendingFile=f; if(f.type.startsWith('video'))pendingFileType='video';else if(f.type.startsWith('image'))pendingFileType='image';else pendingFileType='document'; const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=''; if(pendingFileType==='image'){const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img);}else if(pendingFileType==='video'){const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v);}else{c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`;} document.getElementById('preview-modal').style.display='grid'; }
     function cancelUpload() { document.getElementById('preview-modal').style.display='none'; pendingFile=null; document.getElementById('hidden-file-input').value=""; }
     async function confirmUpload() { if(!pendingFile)return; const cap=document.getElementById('file-caption').value; const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',pendingFile); fd.append('type',pendingFileType); fd.append('caption',cap); document.getElementById('preview-modal').style.display='none'; isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Uploading...`); await fetch('/send_attachment',{method:'POST',body:fd}); pendingFile=null; document.getElementById('hidden-file-input').value=""; setTimeout(()=>{isSending=false;refreshChat(true);},2000); }
@@ -1117,9 +1420,17 @@ async function startRecording() {
     document.getElementById('recording-ui').style.display = 'flex';
 
     recStartTime = Date.now();
+
     recTimerInt = setInterval(() => {
         const diff = Math.floor((Date.now() - recStartTime) / 1000);
-        document.getElementById('rec-timer').innerText =
+
+        const timerEl = document.getElementById('rec-timer');
+        if (!timerEl) {
+            // UI not present → avoid crash
+            return;
+        }
+
+        timerEl.innerText =
             `${Math.floor(diff / 60)}:${String(diff % 60).padStart(2, '0')}`;
     }, 1000);
 }
@@ -1214,8 +1525,31 @@ async function stopRecording(send) {
     let contextMenuPhone=null;
     function showContextMenu(e,p) { e.preventDefault(); const m=document.getElementById('context-menu'); m.style.display='block'; m.style.left=e.pageX+'px'; m.style.top=e.pageY+'px'; contextMenuPhone=p; }
     window.addEventListener('click',()=>{document.getElementById('context-menu').style.display='none';});
-    async function markChatUnread() { if(!contextMenuPhone)return; const r=await fetch('/mark_unread',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:contextMenuPhone})}); if(r.ok){ loadChats(); } }
-    function openImageViewer(src) { const v=document.getElementById('image-viewer'); const i=document.getElementById('full-image'); i.src=src; v.style.display='flex'; }
+    async function markChatUnread() {
+        console.log('[UNREAD] markChatUnread clicked');
+
+        if (!contextMenuPhone) return;
+
+        // 🔥 Remember manual unread action
+        locallyMarkedUnread.add(contextMenuPhone);
+
+        // 🔥 Immediate UI update (no waiting for server)
+        renderChatList();
+
+        // 🔁 Sync backend
+        try {
+            await fetch('/mark_unread', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: contextMenuPhone })
+            });
+        } catch (e) {
+            console.error('[UNREAD] backend failed', e);
+        }
+    }
+
+
+function openImageViewer(src) { const v=document.getElementById('image-viewer'); const i=document.getElementById('full-image'); i.src=src; v.style.display='flex'; }
     function closeImageViewer() { document.getElementById('image-viewer').style.display='none'; }
 
     // --- UTILS ---
@@ -1395,7 +1729,51 @@ async function stopRecording(send) {
           }
       }
 
+      function setReplyTarget(msg) {
+          replyTarget = msg;
 
+          renderReplyBar(msg);
+
+          // ✅ FORCE cursor to input (WhatsApp behavior)
+          const input = document.getElementById('msg-input');
+          input.disabled = false;
+          input.focus();              // 🔥 THIS LINE
+          input.setSelectionRange(input.value.length, input.value.length);
+      }
+      function setReplyTarget(msg) {
+          replyTarget = msg;
+
+          // ✅ CALL THE CORRECT FUNCTION
+          showReplyBar(msg);
+
+          // ✅ Focus input immediately (WhatsApp behavior)
+          const input = document.getElementById('msg-input');
+          if (input) {
+              input.disabled = false;
+              input.focus();
+              input.setSelectionRange(input.value.length, input.value.length);
+          }
+      }
+      function closeContextMenu() {
+          closeMsgContextMenu();
+          closeChatContextMenu();
+      }
+
+      function canDeleteForEveryone(msg) {
+    if (!msg) return false;
+
+    // 1️⃣ Only messages sent by agent
+    if (msg.sender !== 'agent') return false;
+
+    // 2️⃣ Must have WhatsApp message id
+    if (!msg.whatsapp_id) return false;
+
+    // 3️⃣ Must be within 1 hour
+    const msgTime = new Date(msg.timestamp).getTime();
+    const ONE_HOUR = 60 * 60 * 1000;
+
+    return (Date.now() - msgTime) <= ONE_HOUR;
+}
 </script>
 </body>
 </html>
