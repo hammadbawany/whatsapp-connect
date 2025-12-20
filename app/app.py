@@ -17,6 +17,7 @@ import traceback
 import subprocess
 TARGET_WABA_ID = "707727951897342"
 from r2_client import get_r2_client
+import time
 
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
 print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
@@ -608,6 +609,7 @@ def history():
 
     cur.execute("""
         SELECT
+            m.id,
             m.sender,
             m.message,
             m.media_type,
@@ -616,6 +618,9 @@ def history():
             m.timestamp,
             m.whatsapp_id,
             m.context_whatsapp_id,
+             m.deleted_for_me,              -- 🔥 REQUIRED
+             m.deleted_for_everyone,        -- 🔥 REQUIRED
+
 
             -- reply message fields
             r.sender        AS reply_sender,
@@ -646,13 +651,16 @@ def history():
             ts += "Z"
 
         item = {
+            "id": r["id"],                              # 🔥 REQUIRED
             "sender": r["sender"],
             "message": r["message"],
             "media_type": r["media_type"],
             "media_id": r["media_id"],
             "status": r["status"],
             "timestamp": ts,
-            "whatsapp_id": r["whatsapp_id"]
+            "whatsapp_id": r["whatsapp_id"],
+            "deleted_for_me": r["deleted_for_me"],      # 🔥 REQUIRED
+            "deleted_for_everyone": r["deleted_for_everyone"]
         }
 
         if r["reply_whatsapp_id"]:
@@ -1511,20 +1519,18 @@ def send_attachment():
         print("Type:", msg_type)
         print("Size:", len(file_bytes))
 
-        # 3️⃣ Audio conversion (UNCHANGED)
+        # 3️⃣ Audio conversion (VOICE SAFE)
         ogg_bytes = None
         if msg_type == "audio":
-            ogg_bytes = convert_webm_to_ogg(file_bytes)
+            ogg_bytes, duration = convert_webm_to_ogg(file_bytes)
+            audio_kind = detect_voice_or_audio(duration)
+
             files = {
                 "file": ("voice.ogg", ogg_bytes, "audio/ogg; codecs=opus")
             }
             caption = ""
-        else:
-            files = {
-                "file": (file.filename, file_bytes, file.mimetype)
-            }
 
-        # 4️⃣ Upload media to Meta (CRITICAL PATH)
+        # 4️⃣ Upload media to Meta
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
@@ -1539,18 +1545,35 @@ def send_attachment():
 
         media_id = up_resp.get("id")
         if not media_id:
-            return jsonify(up_resp), 500
+            return jsonify({"error": "Media upload failed"}), 500
 
-        # 5️⃣ Send WhatsApp message (CRITICAL PATH)
+        # 🔒 IMPORTANT: let WhatsApp index voice media (DO NOT resend later)
+        if msg_type == "audio":
+            time.sleep(1.0)
+
+        # 5️⃣ Build send payload (SEND ONCE ONLY)
         send_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
             "type": msg_type,
-            msg_type: {"id": media_id}
         }
+
+        if msg_type == "audio":
+            if audio_kind == "voice":
+                send_payload["audio"] = {
+                    "id": media_id,
+                    "voice": True
+                }
+            else:
+                # send as normal audio file
+                send_payload["audio"] = {
+                    "id": media_id
+                }
 
         if caption and msg_type in ["image", "video", "document"]:
             send_payload[msg_type]["caption"] = caption
+
+        print("🚀 FINAL SEND PAYLOAD:", send_payload)
 
         send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         send_resp = requests.post(
@@ -1566,7 +1589,12 @@ def send_attachment():
 
         wa_id = send_resp.get("messages", [{}])[0].get("id")
 
-        # 6️⃣ Save message to DB (UNCHANGED BEHAVIOR)
+        # ⚠️ DO NOT retry audio send
+        if not wa_id:
+            print("[WARN] Message accepted but no WhatsApp ID returned")
+        if "error" in send_resp:
+            print("[META SEND ERROR]", send_resp)
+        # 6️⃣ Save message to DB
         conn = get_conn()
         cur = conn.cursor()
 
@@ -1596,7 +1624,7 @@ def send_attachment():
         cur.close()
         conn.close()
 
-        # 7️⃣ 🔵 NON-BLOCKING R2 UPLOAD VIA WORKER (AUDIO ONLY)
+        # 7️⃣ 🔵 Non-blocking R2 upload (audio only)
         if msg_type == "audio" and ogg_bytes:
             try:
                 print(f"[R2] Upload via Worker media_id={media_id}")
@@ -2520,7 +2548,7 @@ def unread_counts():
 
 
 def convert_webm_to_ogg(webm_bytes):
-    import subprocess, tempfile, os
+    import subprocess, tempfile, os, json
 
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inp:
         inp.write(webm_bytes)
@@ -2533,13 +2561,23 @@ def convert_webm_to_ogg(webm_bytes):
         "-y",
         "-i", inp_path,
         "-vn",
-        "-ac", "1",              # mono
-        "-ar", "48000",           # sample rate
+        "-ac", "1",
+        "-ar", "16000",
         "-c:a", "libopus",
-        "-b:a", "16k",            # ✅ WhatsApp bitrate
-        "-application", "voip",   # ✅ CRITICAL
+        "-b:a", "16k",
+        "-application", "voip",
         out_path
     ], check=True)
+
+    # 🔍 Get duration
+    probe = subprocess.check_output([
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "json",
+        out_path
+    ])
+    duration = float(json.loads(probe)["format"]["duration"])
 
     with open(out_path, "rb") as f:
         ogg_bytes = f.read()
@@ -2547,9 +2585,7 @@ def convert_webm_to_ogg(webm_bytes):
     os.unlink(inp_path)
     os.unlink(out_path)
 
-    return ogg_bytes
-
-print("🔥🔥🔥 UPLOAD ROUTE FILE LOADED")
+    return ogg_bytes, duration
 
 @app.route("/admin/upload_media/<media_id>")
 def upload_media_to_r2(media_id):
@@ -2835,3 +2871,131 @@ def upload_audio_via_worker(media_id, ogg_bytes):
         raise Exception(f"Worker upload failed: {resp.text}")
 
     return f"media/audio/{media_id}.ogg"
+
+
+@app.route('/delete_for_me', methods=['POST'])
+def delete_for_me():
+    try:
+        data = request.get_json(silent=True) or {}
+        msg_id = data.get('id')
+        print(f"[DELETE_FOR_ME] payload: {data}", file=sys.stdout)
+        sys.stdout.flush()
+
+        if not msg_id:
+            print("[DELETE_FOR_ME] missing id in payload", file=sys.stdout)
+            sys.stdout.flush()
+            return jsonify({"error": "missing id"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE messages
+            SET deleted_for_me = TRUE
+            WHERE id = %s
+        """, (msg_id,))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"[DELETE_FOR_ME] success id={msg_id}", file=sys.stdout)
+        sys.stdout.flush()
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print(f"[DELETE_FOR_ME] error: {e}", file=sys.stdout)
+        traceback.print_exc()
+        sys.stdout.flush()
+        return jsonify({"error": "internal_error"}), 500
+
+@app.route('/delete_for_everyone', methods=['POST'])
+def delete_for_everyone():
+    try:
+        # 1️⃣ Read payload
+        data = request.get_json(silent=True) or {}
+        msg_id = data.get('id')
+
+        print(f"[DELETE_FOR_EVERYONE] payload: {data}", file=sys.stdout)
+        sys.stdout.flush()
+
+        if not msg_id:
+            print("[DELETE_FOR_EVERYONE] missing id in payload", file=sys.stdout)
+            sys.stdout.flush()
+            return jsonify({"error": "missing id"}), 400
+
+        # 2️⃣ DB connection (IMPORTANT FIX)
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 3️⃣ Fetch sender
+        cur.execute("""
+            SELECT sender
+            FROM messages
+            WHERE id = %s
+        """, (msg_id,))
+        row = cur.fetchone()
+
+        if not row:
+            print(f"[DELETE_FOR_EVERYONE] message not found id={msg_id}", file=sys.stdout)
+            sys.stdout.flush()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "message_not_found"}), 404
+
+        sender = row["sender"]   # ✅ FIXED
+
+        # 4️⃣ WhatsApp rule: only agent messages
+        if sender != 'agent':
+            print(
+                f"[DELETE_FOR_EVERYONE] blocked — sender={sender} id={msg_id}",
+                file=sys.stdout
+            )
+            sys.stdout.flush()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "cannot_delete_receiver_message"}), 403
+
+        # 5️⃣ Mark deleted for everyone (DB only)
+        cur.execute("""
+            UPDATE messages
+            SET deleted_for_everyone = TRUE
+            WHERE id = %s
+        """, (msg_id,))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"[DELETE_FOR_EVERYONE] success id={msg_id}", file=sys.stdout)
+        sys.stdout.flush()
+
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print(f"[DELETE_FOR_EVERYONE] error: {e}", file=sys.stdout)
+        traceback.print_exc()
+        sys.stdout.flush()
+        return jsonify({"error": "internal_error"}), 500
+
+def wait_for_media_ready(media_id, token, timeout=5):
+    import time, requests
+
+    url = f"https://graph.facebook.com/v20.0/{media_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    start = time.time()
+    while time.time() - start < timeout:
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200 and r.json().get("url"):
+            return True
+        time.sleep(0.4)
+
+    return False
+
+def detect_voice_or_audio(duration_seconds):
+    """
+    WhatsApp iOS safe detection
+    """
+    if duration_seconds <= 10:
+        return "voice"
+    return "audio"
