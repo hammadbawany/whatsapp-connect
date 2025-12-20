@@ -1482,7 +1482,7 @@ def send_attachment():
         if not phone or not file:
             return jsonify({"error": "missing data"}), 400
 
-        # 1️⃣ Get WhatsApp account
+        # 1️⃣ Get WhatsApp account (UNCHANGED LOGIC)
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1509,7 +1509,7 @@ def send_attachment():
         if not acc:
             return jsonify({"error": "No WhatsApp account"}), 400
 
-        # 2️⃣ Read file
+        # 2️⃣ Read file ONCE
         file_bytes = file.read()
         if len(file_bytes) < 100:
             return jsonify({"error": "File too small"}), 400
@@ -1519,18 +1519,26 @@ def send_attachment():
         print("Type:", msg_type)
         print("Size:", len(file_bytes))
 
-        # 3️⃣ Audio conversion (VOICE SAFE)
+        # 3️⃣ Build upload files (AUDIO vs NON-AUDIO)
         ogg_bytes = None
+        audio_kind = None
+
         if msg_type == "audio":
+            # Convert webm → ogg (your existing function)
             ogg_bytes, duration = convert_webm_to_ogg(file_bytes)
             audio_kind = detect_voice_or_audio(duration)
 
             files = {
                 "file": ("voice.ogg", ogg_bytes, "audio/ogg; codecs=opus")
             }
-            caption = ""
+            caption = ""  # WhatsApp does not allow captions on voice
+        else:
+            # 🔴 THIS WAS MISSING → restores image/video/document support
+            files = {
+                "file": (file.filename, file_bytes, file.mimetype)
+            }
 
-        # 4️⃣ Upload media to Meta
+        # 4️⃣ Upload media to Meta (COMMON PATH)
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
@@ -1545,13 +1553,13 @@ def send_attachment():
 
         media_id = up_resp.get("id")
         if not media_id:
-            return jsonify({"error": "Media upload failed"}), 500
+            return jsonify({"error": "Media upload failed", "meta": up_resp}), 500
 
-        # 🔒 IMPORTANT: let WhatsApp index voice media (DO NOT resend later)
+        # 5️⃣ Small delay for audio indexing ONLY
         if msg_type == "audio":
             time.sleep(1.0)
 
-        # 5️⃣ Build send payload (SEND ONCE ONLY)
+        # 6️⃣ Build send payload (FULL FEATURE SET)
         send_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
@@ -1559,22 +1567,21 @@ def send_attachment():
         }
 
         if msg_type == "audio":
-            if audio_kind == "voice":
-                send_payload["audio"] = {
-                    "id": media_id,
-                    "voice": True
-                }
-            else:
-                # send as normal audio file
-                send_payload["audio"] = {
-                    "id": media_id
-                }
+            # ✅ iOS-safe behavior: send as normal audio (no voice flag)
+            # This preserves reliability across all platforms
+            send_payload["audio"] = {
+                "id": media_id
+            }
+        else:
+            send_payload[msg_type] = {"id": media_id}
 
+        # Caption logic (same as old code)
         if caption and msg_type in ["image", "video", "document"]:
             send_payload[msg_type]["caption"] = caption
 
         print("🚀 FINAL SEND PAYLOAD:", send_payload)
 
+        # 7️⃣ Send message (ONCE ONLY)
         send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         send_resp = requests.post(
             send_url,
@@ -1588,13 +1595,10 @@ def send_attachment():
         print("📨 Meta send response:", send_resp)
 
         wa_id = send_resp.get("messages", [{}])[0].get("id")
-
-        # ⚠️ DO NOT retry audio send
         if not wa_id:
-            print("[WARN] Message accepted but no WhatsApp ID returned")
-        if "error" in send_resp:
-            print("[META SEND ERROR]", send_resp)
-        # 6️⃣ Save message to DB
+            print("[WARN] WhatsApp message id missing", send_resp)
+
+        # 8️⃣ Save message to DB (UNCHANGED SCHEMA)
         conn = get_conn()
         cur = conn.cursor()
 
@@ -1624,7 +1628,7 @@ def send_attachment():
         cur.close()
         conn.close()
 
-        # 7️⃣ 🔵 Non-blocking R2 upload (audio only)
+        # 9️⃣ 🔵 Non-blocking R2 upload (AUDIO ONLY)
         if msg_type == "audio" and ogg_bytes:
             try:
                 print(f"[R2] Upload via Worker media_id={media_id}")
@@ -1639,6 +1643,7 @@ def send_attachment():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 '''
 
@@ -2548,7 +2553,7 @@ def unread_counts():
 
 
 def convert_webm_to_ogg(webm_bytes):
-    import subprocess, tempfile, os, json
+    import subprocess, tempfile, os
 
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inp:
         inp.write(webm_bytes)
@@ -2561,23 +2566,16 @@ def convert_webm_to_ogg(webm_bytes):
         "-y",
         "-i", inp_path,
         "-vn",
+        "-map_metadata", "-1",
         "-ac", "1",
-        "-ar", "16000",
+        "-ar", "48000",              # 🔥 MUST BE 48000 FOR iOS
         "-c:a", "libopus",
-        "-b:a", "16k",
+        "-b:a", "24k",               # 🔥 NOT 16k
         "-application", "voip",
+        "-frame_duration", "20",     # 🔥 REQUIRED FOR iOS
+        "-packet_loss", "5",
         out_path
     ], check=True)
-
-    # 🔍 Get duration
-    probe = subprocess.check_output([
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "json",
-        out_path
-    ])
-    duration = float(json.loads(probe)["format"]["duration"])
 
     with open(out_path, "rb") as f:
         ogg_bytes = f.read()
@@ -2585,7 +2583,7 @@ def convert_webm_to_ogg(webm_bytes):
     os.unlink(inp_path)
     os.unlink(out_path)
 
-    return ogg_bytes, duration
+    return ogg_bytes
 
 @app.route("/admin/upload_media/<media_id>")
 def upload_media_to_r2(media_id):
