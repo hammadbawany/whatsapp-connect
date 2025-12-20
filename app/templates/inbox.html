@@ -610,43 +610,74 @@ async function deleteForMe(msg) {
 }
 
 async function deleteForEveryone(msg) {
+    if (!confirm("Are you sure you want to delete this message for everyone?")) return;
+
     console.log('[DELETE_FOR_EVERYONE] sending request for', msg);
+
+    // Optimistic UI Update (Fade it out immediately)
+    const dom = document.querySelector(`[data-msg-id="${msg.id}"]`);
+    if (dom) {
+        dom.style.opacity = '0.5';
+    }
+
     try {
         const res = await fetch('/delete_for_everyone', {
             method: 'POST',
-            headers: {'Content-Type':'application/json'},
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: msg.id })
         });
 
-        let json;
-        try { json = await res.json(); } catch(e) { json = null; }
+        let json = null;
+        try { json = await res.json(); } catch (e) {}
 
         console.log('[DELETE_FOR_EVERYONE] response', res.status, json);
 
-        if (!res.ok) {
-            const err = (json && json.error) ? json.error : `HTTP ${res.status}`;
-            console.error('[DELETE_FOR_EVERYONE] failed:', err);
-            alert('Delete for everyone failed: ' + err);
-            return;
+        if (res.ok && json.success) {
+            // ✅ Success
+            if (dom) {
+                dom.classList.add('deleted');
+                dom.style.opacity = '1';
+                dom.innerHTML = `<span class="deleted-msg">You deleted this message</span>`;
+                // Remove the dropdown arrow if present
+                const actionBtn = dom.querySelector('.msg-actions');
+                if (actionBtn) actionBtn.remove();
+            }
+            showToast("Message deleted for everyone");
+        } else {
+            // ❌ Failed
+            if (dom) dom.style.opacity = '1'; // Revert opacity
+
+            let errMsg = "Could not delete message.";
+            if (json && json.details) {
+                // Parse Meta error
+                try {
+                    const metaErr = JSON.parse(json.details);
+                    if (metaErr.error && metaErr.error.message) {
+                        errMsg += " " + metaErr.error.message;
+                    }
+                } catch(e) {
+                    errMsg += " " + json.details;
+                }
+            }
+            alert(errMsg);
         }
 
-        // Update UI
-        const dom = document.querySelector(`[data-msg-id="${msg.id}"]`)
-                  || document.querySelector(`[data-wamid="${msg.whatsapp_id}"]`);
-        if (dom) {
-            dom.classList.add('deleted');
-            dom.innerHTML = `<span class="deleted-msg">This message was deleted for everyone</span>`;
-        }
-
-        refreshChat(true);
+        // Refresh chat to ensure data consistency
+        refreshChat(false);
 
     } catch (err) {
+        if (dom) dom.style.opacity = '1';
         console.error('[DELETE_FOR_EVERYONE] network error', err);
-        alert('Network error while deleting message for everyone');
+        alert("Network error. Please try again.");
     }
 }
 
 
+
+function showToast(message) {
+    // You can replace this with a fancy toast if you have one
+    console.log("TOAST:", message);
+}
 
 function canDeleteForEveryone(msg) {
     const msgTime = new Date(msg.timestamp).getTime();
@@ -731,7 +762,11 @@ function openContextMenu(event, el) {
         }
 
         menu.style.left = rect.left + 'px';
-
+        // 🔒 FORCE HIDE 'Delete for Everyone'
+         const deleteEveryoneBtn = menu.querySelector('[data-action="delete-everyone"]');
+         if (deleteEveryoneBtn) {
+             deleteEveryoneBtn.style.display = 'none';
+         }
 }
 
 

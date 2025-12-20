@@ -1,5 +1,9 @@
 # app.py (trimmed/combined - replace your current app.py with this or merge carefully)
 from dotenv import load_dotenv
+from urllib.parse import quote
+import logging
+import http.client as http_client
+
 load_dotenv()
 import json
 import sys
@@ -827,7 +831,6 @@ def send_text():
         "type": "text",
         "text": {"body": text}
     }
-
     if reply_to:
         payload["context"] = {"message_id": reply_to}
 
@@ -2871,108 +2874,166 @@ def upload_audio_via_worker(media_id, ogg_bytes):
     return f"media/audio/{media_id}.ogg"
 
 
+
+@app.route('/delete_for_everyone', methods=['POST'])
+def delete_for_everyone():
+    try:
+        # 🟢 1. SETUP DEEP LOGGING
+        # This will print the RAW HTTP request/response to your terminal
+        http_client.HTTPConnection.debuglevel = 1
+        logging.basicConfig()
+        logging.getLogger().setLevel(logging.DEBUG)
+        requests_log = logging.getLogger("requests.packages.urllib3")
+        requests_log.setLevel(logging.DEBUG)
+        requests_log.propagate = True
+
+        print("\n" + "="*50)
+        print("🛑 START DELETE FOR EVERYONE DEBUG")
+        print("="*50)
+
+        data = request.get_json(silent=True) or {}
+        msg_id = data.get("id")
+
+        print(f"🔹 Incoming Payload ID: {msg_id}")
+
+        if not msg_id:
+            return jsonify({"error": "missing id"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 2️⃣ Load message details
+        cur.execute("""
+            SELECT
+                m.id,
+                m.sender,
+                m.whatsapp_id,
+                a.phone_number_id,
+                a.access_token,
+                a.waba_id
+            FROM messages m
+            JOIN whatsapp_accounts a
+              ON a.id = m.whatsapp_account_id
+            WHERE m.id = %s
+        """, (msg_id,))
+        msg = cur.fetchone()
+
+        if not msg:
+            print("❌ Error: Message not found in DB")
+            cur.close(); conn.close()
+            return jsonify({"error": "message_not_found"}), 404
+
+        print(f"🔹 DB Data Found:")
+        print(f"   - Sender: {msg['sender']}")
+        print(f"   - WAMID: {msg['whatsapp_id']}")
+        print(f"   - Phone ID: {msg['phone_number_id']}")
+
+        # 3️⃣ Validation
+        if msg["sender"] != "agent":
+            print("❌ Error: Sender is not agent")
+            cur.close(); conn.close()
+            return jsonify({"error": "cannot_delete_customer_message"}), 403
+
+        if not msg["whatsapp_id"]:
+            print("❌ Error: No Whatsapp ID (WAMID)")
+            cur.close(); conn.close()
+            return jsonify({"error": "no_wamid_found"}), 400
+
+        # 4️⃣ Prepare Request
+        target_url = f"https://graph.facebook.com/v20.0/{msg['phone_number_id']}/messages"
+
+        # 🔒 STRICT JSON PAYLOAD
+        payload = json.dumps({
+            "message_id": msg["whatsapp_id"]
+        })
+
+        headers = {
+            "Authorization": f"Bearer {msg['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        print(f"🔹 Sending DELETE Request:")
+        print(f"   - URL: {target_url}")
+        print(f"   - Body: {payload}")
+
+        # ⚡ EXECUTE REQUEST
+        # We use requests.request to ensure 'data' is attached to DELETE
+        resp = requests.request("DELETE", target_url, headers=headers, data=payload)
+
+        # 🛑 TURN OFF DEEP LOGGING
+        http_client.HTTPConnection.debuglevel = 0
+
+        try:
+            resp_json = resp.json()
+        except:
+            resp_json = {"text": resp.text}
+
+        print(f"\n🔹 Meta Response:")
+        print(f"   - Status: {resp.status_code}")
+        print(f"   - Body: {resp_json}")
+        print("="*50 + "\n")
+
+        # 5️⃣ Success Handler
+        if resp.status_code == 200 and resp_json.get("success"):
+            print("✅ Meta confirmed success. Updating DB...")
+            cur.execute("""
+                UPDATE messages
+                SET deleted_for_everyone = TRUE
+                WHERE id = %s
+            """, (msg_id,))
+            conn.commit()
+            cur.close(); conn.close()
+            return jsonify({"success": True, "meta_deleted": True})
+
+        # 6️⃣ Failure Handler
+        cur.close(); conn.close()
+        return jsonify({
+            "success": False,
+            "error": resp_json.get("error", {}).get("message", "Meta API Error"),
+            "details": resp_json
+        }), 400
+
+    except Exception as e:
+        print(f"❌ EXCEPTION: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "internal_error"}), 500
+
+
 @app.route('/delete_for_me', methods=['POST'])
 def delete_for_me():
     try:
         data = request.get_json(silent=True) or {}
         msg_id = data.get('id')
-        print(f"[DELETE_FOR_ME] payload: {data}", file=sys.stdout)
-        sys.stdout.flush()
+        print(f"\n🟢 [DELETE_FOR_ME] Requested ID: {msg_id}")
 
         if not msg_id:
-            print("[DELETE_FOR_ME] missing id in payload", file=sys.stdout)
-            sys.stdout.flush()
             return jsonify({"error": "missing id"}), 400
 
         conn = get_conn()
         cur = conn.cursor()
+
         cur.execute("""
             UPDATE messages
             SET deleted_for_me = TRUE
             WHERE id = %s
         """, (msg_id,))
 
-        conn.commit()
-        cur.close()
-        conn.close()
+        rows = cur.rowcount
 
-        print(f"[DELETE_FOR_ME] success id={msg_id}", file=sys.stdout)
-        sys.stdout.flush()
-        return jsonify({"success": True})
-
-    except Exception as e:
-        print(f"[DELETE_FOR_ME] error: {e}", file=sys.stdout)
-        traceback.print_exc()
-        sys.stdout.flush()
-        return jsonify({"error": "internal_error"}), 500
-
-@app.route('/delete_for_everyone', methods=['POST'])
-def delete_for_everyone():
-    try:
-        # 1️⃣ Read payload
-        data = request.get_json(silent=True) or {}
-        msg_id = data.get('id')
-
-        print(f"[DELETE_FOR_EVERYONE] payload: {data}", file=sys.stdout)
-        sys.stdout.flush()
-
-        if not msg_id:
-            print("[DELETE_FOR_EVERYONE] missing id in payload", file=sys.stdout)
-            sys.stdout.flush()
-            return jsonify({"error": "missing id"}), 400
-
-        # 2️⃣ DB connection (IMPORTANT FIX)
-        conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # 3️⃣ Fetch sender
-        cur.execute("""
-            SELECT sender
-            FROM messages
-            WHERE id = %s
-        """, (msg_id,))
-        row = cur.fetchone()
-
-        if not row:
-            print(f"[DELETE_FOR_EVERYONE] message not found id={msg_id}", file=sys.stdout)
-            sys.stdout.flush()
-            cur.close()
-            conn.close()
+        if rows > 0:
+            conn.commit()
+            print(f"✅ [DELETE_FOR_ME] Success. Rows updated: {rows}")
+            cur.close(); conn.close()
+            return jsonify({"success": True})
+        else:
+            conn.rollback()
+            print(f"⚠️ [DELETE_FOR_ME] Failed. ID not found in DB.")
+            cur.close(); conn.close()
             return jsonify({"error": "message_not_found"}), 404
 
-        sender = row["sender"]   # ✅ FIXED
-
-        # 4️⃣ WhatsApp rule: only agent messages
-        if sender != 'agent':
-            print(
-                f"[DELETE_FOR_EVERYONE] blocked — sender={sender} id={msg_id}",
-                file=sys.stdout
-            )
-            sys.stdout.flush()
-            cur.close()
-            conn.close()
-            return jsonify({"error": "cannot_delete_receiver_message"}), 403
-
-        # 5️⃣ Mark deleted for everyone (DB only)
-        cur.execute("""
-            UPDATE messages
-            SET deleted_for_everyone = TRUE
-            WHERE id = %s
-        """, (msg_id,))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print(f"[DELETE_FOR_EVERYONE] success id={msg_id}", file=sys.stdout)
-        sys.stdout.flush()
-
-        return jsonify({"success": True})
-
     except Exception as e:
-        print(f"[DELETE_FOR_EVERYONE] error: {e}", file=sys.stdout)
+        print(f"❌ [DELETE_FOR_ME] Error: {e}")
         traceback.print_exc()
-        sys.stdout.flush()
         return jsonify({"error": "internal_error"}), 500
 
 def wait_for_media_ready(media_id, token, timeout=5):
@@ -2997,3 +3058,118 @@ def detect_voice_or_audio(duration_seconds):
     if duration_seconds <= 10:
         return "voice"
     return "audio"
+
+
+# ==========================================
+# 🟢 API: SEND ORDER CONFIRMATION (3 VARIABLES)
+# ==========================================
+@app.route("/api/external/send_order", methods=["POST"])
+def external_send_order():
+    try:
+        # 1️⃣ SECURITY: Check API Key
+        # Add API_SECRET="mysecret123" to your .env file
+        api_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("API_SECRET", "default_secret")
+
+        if api_key != expected_key:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        # 2️⃣ Get Data from Website
+        data = request.json
+        raw_phone = data.get("phone")
+
+        # Variables for the template
+        order_code = str(data.get("order_code", "N/A"))      # {{1}}
+        amount = str(data.get("amount", "0"))                # {{2}}
+        delivery_time = str(data.get("delivery_time", "N/A")) # {{3}}
+
+        # Template Name (Must match exactly what is in WhatsApp Manager)
+        # You can pass it from website or hardcode it here
+        template_name = data.get("template_name", "orderconfirmation")
+        language = data.get("language", "en_US")
+
+        phone = normalize_phone(raw_phone)
+        if not phone:
+            return jsonify({"error": "Invalid phone number"}), 400
+
+        # 3️⃣ Get WhatsApp Credentials
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute(
+            "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
+            (TARGET_WABA_ID,)
+        )
+        acc = cur.fetchone()
+
+        if not acc:
+            cur.close(); conn.close()
+            return jsonify({"error": "WhatsApp account not connected"}), 500
+
+        # 4️⃣ Construct Payload (3 Variables)
+        url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        headers = {
+            "Authorization": f"Bearer {acc['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": language},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            # Variable 1: {{ordercode}}
+                            { "type": "text", "text": order_code },
+
+                            # Variable 2: {{amount}}
+                            { "type": "text", "text": amount },
+
+                            # Variable 3: {{deliverytime}}
+                            { "type": "text", "text": delivery_time }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        # 5️⃣ Send to Meta
+        resp = requests.post(url, headers=headers, json=payload)
+        resp_json = resp.json()
+
+        # 6️⃣ Save to Database (So you see it in your Inbox)
+        wa_id = None
+        if resp_json.get("messages"):
+            wa_id = resp_json["messages"][0]["id"]
+
+        # Text to show in your dashboard history
+        dashboard_preview = (
+            f"🤖 Template: Order {order_code}\n"
+            f"Amt: {amount}\n"
+            f"Del: {delivery_time}"
+        )
+
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
+            )
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+        """, (acc["id"], phone, dashboard_preview, wa_id))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if resp.status_code in [200, 201]:
+            return jsonify({"success": True, "wa_id": wa_id})
+        else:
+            return jsonify({"success": False, "meta_error": resp_json}), 400
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
