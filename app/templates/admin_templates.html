@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Template Manager</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont;
+            padding: 20px;
+            background: #f5f6f7;
+        }
+        button {
+            padding: 10px 16px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 20px;
+            background: white;
+        }
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background: #fafafa;
+        }
+        .hidden {
+            opacity: 0.4;
+        }
+    </style>
+</head>
+<body>
+
+<h2>WhatsApp Templates</h2>
+
+<button onclick="syncTemplates()">🔄 Sync Templates from Meta</button>
+
+<table id="tplTable">
+    <thead>
+        <tr>
+            <th>Internal Name</th>
+            <th>Meta Name</th>
+            <th>Language</th>
+            <th>Visible</th>
+            <th>Usage</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<script>
+async function syncTemplates() {
+    if (!confirm("Fetch templates from Meta?")) return;
+
+    const res = await fetch("/sync_templates", { method: "POST" });
+    const json = await res.json();
+
+    if (!res.ok) {
+        alert("Sync failed: " + (json.error || "unknown error"));
+        return;
+    }
+
+    alert("Templates synced: " + json.count);
+    loadTemplates();
+}
+
+async function loadTemplates() {
+    const res = await fetch("/template_aliases");
+    const rows = await res.json();
+
+    const tbody = document.querySelector("#tplTable tbody");
+    tbody.innerHTML = "";
+
+    rows.forEach(tpl => {
+        const tr = document.createElement("tr");
+        if (!tpl.visible_in_ui) tr.classList.add("hidden");
+
+        tr.innerHTML = `
+            <td>${tpl.internal_name}</td>
+            <td>${tpl.meta_template_name}</td>
+            <td>${tpl.language_code}</td>
+            <td>${tpl.visible_in_ui ? "Yes" : "No"}</td>
+            <td>${tpl.usage_type}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+loadTemplates();
+</script>
+
+</body>
+</html>
