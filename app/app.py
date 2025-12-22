@@ -3066,27 +3066,33 @@ def detect_voice_or_audio(duration_seconds):
 @app.route("/api/external/send_order", methods=["POST"])
 def external_send_order():
     try:
-        # 1️⃣ SECURITY: Check API Key
+        # 1️⃣ SECURITY: Check API Key (Header OR URL)
         # Add API_SECRET="mysecret123" to your .env file
-        api_key = request.headers.get("X-API-Key")
+        incoming_key = request.headers.get("X-API-Key") or request.args.get("X-API-Key")
         expected_key = os.getenv("API_SECRET", "default_secret")
 
-        if api_key != expected_key:
+        # Debugging Security
+        print(f"🔑 Incoming Key: {incoming_key} | Expected: {expected_key}")
+
+        if incoming_key != expected_key:
             return jsonify({"error": "Unauthorized"}), 401
 
-        # 2️⃣ Get Data from Website
+        # 2️⃣ Get Data from Website/Postman
         data = request.json
+
+        # ⚠️ CRITICAL: We extract simple variables here.
+        # Do not pass the full Meta structure from Postman.
         raw_phone = data.get("phone")
 
-        # Variables for the template
-        order_code = str(data.get("order_code", "N/A"))      # {{1}}
-        amount = str(data.get("amount", "0"))                # {{2}}
-        delivery_time = str(data.get("delivery_time", "N/A")) # {{3}}
+        # Variables for the template {{1}}, {{2}}, {{3}}
+        order_code = str(data.get("order_code", "N/A"))
+        amount = str(data.get("amount", "0"))
+        delivery_time = str(data.get("delivery_time", "N/A"))
 
-        # Template Name (Must match exactly what is in WhatsApp Manager)
-        # You can pass it from website or hardcode it here
-        template_name = data.get("template_name", "orderconfirmation")
-        language = data.get("language", "en_US")
+        # Template Settings
+        # Defaulting language to "en" because your screenshot showed "English" (not US)
+        template_name = data.get("template_name") or "orderconfirmation"
+        language = data.get("language") or "en"
 
         phone = normalize_phone(raw_phone)
         if not phone:
@@ -3104,15 +3110,19 @@ def external_send_order():
 
         if not acc:
             cur.close(); conn.close()
-            return jsonify({"error": "WhatsApp account not connected"}), 500
+            return jsonify({"error": "WhatsApp account not connected to DB"}), 500
 
-        # 4️⃣ Construct Payload (3 Variables)
+        # 4️⃣ Construct Payload (Python builds the complex structure here)
         url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         headers = {
             "Authorization": f"Bearer {acc['access_token']}",
             "Content-Type": "application/json"
         }
 
+# ... inside external_send_order ...
+
+        # 4️⃣ Construct Payload (WITH NAMED PARAMETERS)
+        # 🟢 FIX: We added "parameter_name" to match your template screenshot
         payload = {
             "messaging_product": "whatsapp",
             "to": phone,
@@ -3125,29 +3135,63 @@ def external_send_order():
                         "type": "body",
                         "parameters": [
                             # Variable 1: {{ordercode}}
-                            { "type": "text", "text": order_code },
+                            {
+                                "type": "text",
+                                "parameter_name": "ordercode",
+                                "text": order_code
+                            },
 
                             # Variable 2: {{amount}}
-                            { "type": "text", "text": amount },
+                            {
+                                "type": "text",
+                                "parameter_name": "amount",
+                                "text": amount
+                            },
 
                             # Variable 3: {{deliverytime}}
-                            { "type": "text", "text": delivery_time }
+                            {
+                                "type": "text",
+                                "parameter_name": "deliverytime",
+                                "text": delivery_time
+                            }
+                        ]
+                    },
+                    # 🟢 OPTIONAL: Button Payloads (Best Practice for Quick Replies)
+                    # This tells your webhook which button was clicked (YES or CANCEL)
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": "0", # First Button (Yes)
+                        "parameters": [
+                            {"type": "payload", "payload": "YES_SHARE_DESIGN"}
+                        ]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": "1", # Second Button (Cancel)
+                        "parameters": [
+                            {"type": "payload", "payload": "CANCEL_ORDER"}
                         ]
                     }
                 ]
             }
         }
+        # 🐛 DEBUG: Print what we are sending to Meta
+        print("\n" + "="*30)
+        print("🚀 SENDING TO META:")
+        print(json.dumps(payload, indent=2))
+        print("="*30 + "\n")
 
         # 5️⃣ Send to Meta
         resp = requests.post(url, headers=headers, json=payload)
         resp_json = resp.json()
 
-        # 6️⃣ Save to Database (So you see it in your Inbox)
+        # 6️⃣ Save to Database
         wa_id = None
         if resp_json.get("messages"):
             wa_id = resp_json["messages"][0]["id"]
 
-        # Text to show in your dashboard history
         dashboard_preview = (
             f"🤖 Template: Order {order_code}\n"
             f"Amt: {amount}\n"
