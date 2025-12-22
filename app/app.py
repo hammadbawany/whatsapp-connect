@@ -3192,10 +3192,15 @@ def external_send_order():
         if resp_json.get("messages"):
             wa_id = resp_json["messages"][0]["id"]
 
-        dashboard_preview = (
-            f"🤖 Template: Order {order_code}\n"
-            f"Amt: {amount}\n"
-            f"Del: {delivery_time}"
+# 🟢 CHANGED: Reconstruct the FULL message text to match your template
+        # We use Python f-strings to inject the variables into the text exactly like WhatsApp does.
+        full_message_body = (
+            "Thank You for placing order\n"
+            f"Your order code is {order_code}\n"
+            f"Your Payable amount is {amount}\n\n"
+            "Your order is now Confirmed\n"
+            f"Delivery time is {delivery_time}\n"
+            "We will show you sample before printing"
         )
 
         cur.execute("""
@@ -3203,12 +3208,12 @@ def external_send_order():
                 whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
             )
             VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
-        """, (acc["id"], phone, dashboard_preview, wa_id))
+        """, (acc["id"], phone, full_message_body, wa_id))
 
         conn.commit()
         cur.close()
         conn.close()
-
+        
         if resp.status_code in [200, 201]:
             return jsonify({"success": True, "wa_id": wa_id})
         else:
