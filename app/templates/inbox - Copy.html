@@ -1325,73 +1325,10 @@ function openContextMenu(event, el) {
     function resetQRForm() { document.getElementById('qr-id').value=""; document.getElementById('new-qr-shortcut').value=""; document.getElementById('new-qr-msg').value=""; document.getElementById('qr-save-btn').innerText="Add"; document.getElementById('qr-cancel-btn').style.display="none"; }
     async function saveQuickReply() { const id=document.getElementById('qr-id').value; const sc=document.getElementById('new-qr-shortcut').value; const msg=document.getElementById('new-qr-msg').value; if(!sc||!msg)return alert("Fill"); let m='POST', u='/quick_replies'; if(id){m='PUT'; u=`/quick_replies/${id}`;} const r=await fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify({shortcut:sc, message:msg})}); if(r.ok){resetQRForm(); await loadQuickReplies(); renderManageQRList();}else{alert("Error");} }
     async function deleteQuickReply(id) { if(!confirm("Delete?"))return; await fetch(`/quick_replies/${id}`,{method:'DELETE'}); await loadQuickReplies(); renderManageQRList(); }
-    async function openTemplateModal() {
-        document.getElementById('template-modal').style.display = 'grid';
-
-        const l = document.getElementById('template-list');
-        l.innerHTML = 'Loading...';
-
-        try {
-            const r = await fetch('/template_aliases');
-            const d = await r.json();
-
-            allTemplates = d.filter(t => t.visible_in_ui === true);
-            renderTemplates(allTemplates);
-
-        } catch (e) {
-            console.error('Template fetch failed', e);
-            l.innerHTML = 'Error loading templates';
-        }
-    }
-
-
-    function renderTemplates(templates) {
-      const list = document.getElementById('template-list');
-      list.innerHTML = '';
-
-      if (!templates || templates.length === 0) {
-          list.innerHTML = '<div style="color:#8696a0;">No templates found</div>';
-          return;
-      }
-
-      templates.forEach(t => {
-          const div = document.createElement('div');
-          div.className = 'template-item';
-
-          // ✅ real preview from DB
-          let preview = (t.preview_text || '')
-              .split('\n')
-              .slice(0, 4)          // 🔥 only first 3–4 lines
-              .join('<br>');
-
-          div.innerHTML = `
-              <div class="template-name">${t.internal_name}</div>
-              <div class="template-body">${preview}</div>
-          `;
-
-          div.onclick = () => {
-              sendTemplate(
-                  t.meta_template_name,
-                  t.language_code,
-                  t.preview_text || ''
-              );
-          };
-
-          list.appendChild(div);
-      });
-  }
-
-
-
-    function filterTemplates() {
-        const q = document.getElementById('template-search').value.toLowerCase();
-
-        renderTemplates(
-            allTemplates.filter(t =>
-                t.internal_name.toLowerCase().includes(q)
-            )
-        );
-    }
+    async function openTemplateModal() { document.getElementById('template-modal').style.display='grid'; const l=document.getElementById('template-list'); l.innerHTML='Loading...'; try{ const r=await fetch('/get_templates'); const d=await r.json(); if(d.data){allTemplates=d.data; renderTemplates(allTemplates);}else{l.innerHTML='Error';}}catch(e){l.innerHTML='Error';} }
+    function renderTemplates(ts) { const l=document.getElementById('template-list'); l.innerHTML=''; ts.forEach(t=>{ const d=document.createElement('div'); d.className='template-item'; const c=getTemplateFullContent(t); const displayText=c.replace(/\n/g,'<br>'); d.innerHTML=`<div class="template-name">${t.name}</div><div class="template-body">${displayText}</div>`; const safeContent=c.replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,'\\n'); d.setAttribute('onclick', `sendTemplate('${t.name}', '${t.language}', '${safeContent}')`); l.appendChild(d); }); }
+    function getTemplateFullContent(t) { let txt=""; const h=t.components.find(c=>c.type==='HEADER'); if(h&&h.format==='TEXT')txt+=`*${h.text}*\n\n`; const b=t.components.find(c=>c.type==='BODY'); if(b)txt+=b.text; const f=t.components.find(c=>c.type==='FOOTER'); if(f)txt+=`\n\n_${f.text}_`; const btns=t.components.find(c=>c.type==='BUTTONS'); if(btns&&btns.buttons){txt+="\n\n";btns.buttons.forEach(b=>{if(b.type==='QUICK_REPLY')txt+=`[↩️ ${b.text}] `;else txt+=`[🔗 ${b.text}] `;});} return txt; }
+    function filterTemplates() { const q=document.getElementById('template-search').value.toLowerCase(); renderTemplates(allTemplates.filter(t=>t.name.toLowerCase().includes(q))); }
     async function sendTemplate(n,l,c) { if(!confirm(`Send "${n}"?`))return; closeModal('template-modal'); if(chatHistoryTimer)clearInterval(chatHistoryTimer); isSending=true; const formattedText = c.replace(/\n/g,'<br>'); document.getElementById('messages').insertAdjacentHTML('beforeend',`<div class="msg sent">${formattedText} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`); document.getElementById('messages').scrollTop=document.getElementById('messages').scrollHeight; try{await fetch('/send_template',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:currentPhone,template_name:n,language:l,template_body:c})});}catch(e){alert("Failed");} setTimeout(()=>{isSending=false;refreshChat(false);chatHistoryTimer=setInterval(refreshChat,3000);},2000); }
     function setFilter(t,e) { currentFilter=t; document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active')); e.classList.add('active'); renderChatList(); }
     function filterChats(query) {

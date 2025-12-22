@@ -3213,7 +3213,7 @@ def external_send_order():
         conn.commit()
         cur.close()
         conn.close()
-        
+
         if resp.status_code in [200, 201]:
             return jsonify({"success": True, "wa_id": wa_id})
         else:
@@ -3222,3 +3222,201 @@ def external_send_order():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+###########
+###templater syncing
+
+
+@app.route("/sync_templates", methods=["POST"])
+def sync_templates_basic():
+    try:
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1️⃣ Get WhatsApp account (TARGET_WABA_ID only)
+        cur.execute("""
+            SELECT waba_id, access_token
+            FROM whatsapp_accounts
+            WHERE waba_id = %s
+            LIMIT 1
+        """, (TARGET_WABA_ID,))
+        acc = cur.fetchone()
+
+        if not acc:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "No WhatsApp account"}), 400
+
+        # 2️⃣ Fetch templates from Meta
+        url = f"https://graph.facebook.com/v20.0/{acc['waba_id']}/message_templates"
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {acc['access_token']}"}
+        ).json()
+
+        templates = resp.get("data", [])
+        synced = 0
+
+        # 3️⃣ Insert / update aliases
+        for tpl in templates:
+            meta_name = tpl.get("name")
+            language = tpl.get("language")
+
+            # Extract BODY text for UI preview
+            preview_text = ""
+            for c in tpl.get("components", []):
+                if c.get("type") == "BODY":
+                    preview_text = c.get("text", "")
+                    break
+
+            cur.execute("""
+                INSERT INTO template_aliases (
+                    meta_template_name,
+                    internal_name,
+                    visible_in_ui,
+                    usage_type,
+                    language_code,
+                    preview_text
+                )
+                VALUES (%s, %s, TRUE, 'manual', %s, %s)
+                ON CONFLICT (meta_template_name, language_code)
+                DO UPDATE SET
+                    preview_text = EXCLUDED.preview_text
+            """, (
+                meta_name,
+                meta_name.replace("_", " ").title(),
+                language,
+                preview_text
+            ))
+
+            synced += 1
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "templates_synced": synced
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/template_aliases", methods=["GET"])
+def get_template_aliases():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT
+            id,
+            meta_template_name,
+            internal_name,
+            visible_in_ui,
+            usage_type,
+            language_code,
+            preview_text
+        FROM template_aliases
+        ORDER BY created_at DESC
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return jsonify(rows)
+
+
+@app.route("/template_aliases/<int:tpl_id>", methods=["POST"])
+def update_template_alias(tpl_id):
+    data = request.get_json()
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE template_aliases
+        SET
+            internal_name = %s,
+            visible_in_ui = %s,
+            usage_type = %s
+        WHERE id = %s
+    """, (
+        data["internal_name"],
+        data["visible_in_ui"],
+        data["usage_type"],
+        tpl_id
+    ))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"success": True})
+
+
+@app.route("/admin/sync_templates", methods=["POST"])
+def sync_templates():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # Get latest WhatsApp account
+    cur.execute("""
+        SELECT waba_id, access_token
+        FROM whatsapp_accounts
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+    acc = cur.fetchone()
+
+    if not acc:
+        return jsonify({"error": "No WhatsApp account"}), 400
+
+    url = f"https://graph.facebook.com/v20.0/{acc['waba_id']}/message_templates"
+    headers = {"Authorization": f"Bearer {acc['access_token']}"}
+
+    resp = requests.get(url, headers=headers).json()
+
+    if "data" not in resp:
+        return jsonify(resp), 400
+
+    synced = 0
+
+    for tpl in resp["data"]:
+        for lang in tpl.get("language", []):
+
+            cur.execute("""
+                INSERT INTO template_aliases (
+                    meta_template_name,
+                    language_code,
+                    internal_name,
+                    usage_type
+                )
+                VALUES (%s, %s, %s, 'manual')
+                ON CONFLICT (meta_template_name, language_code)
+                DO NOTHING
+            """, (
+                tpl["name"],
+                lang,
+                tpl["name"].replace("_", " ").title()
+            ))
+
+            synced += 1
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "templates_synced": synced
+    })
+
+
+@app.route("/admin/templates")
+def admin_templates_page():
+    return render_template("admin_templates.html")
