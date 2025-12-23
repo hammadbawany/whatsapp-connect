@@ -19,9 +19,10 @@ import tempfile
 from flask import Response
 import traceback
 import subprocess
-TARGET_WABA_ID = "707727951897342"
+TARGET_WABA_ID = "1628402398537645"
 from r2_client import get_r2_client
 import time
+import re
 
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
 print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
@@ -2472,7 +2473,7 @@ def connect_page():
         already_connected=already_connected,
         review_mode=review_mode
     )
-
+'''
 # --- HELPER: NORMALIZE PHONE ---
 def normalize_phone(phone):
     """
@@ -2483,6 +2484,29 @@ def normalize_phone(phone):
     p = str(phone).strip().replace("+", "").replace(" ", "").replace("-", "")
 
     # Specific logic for Pakistan (03 -> 923)
+    if p.startswith("03") and len(p) == 11:
+        return "92" + p[1:]
+
+    return p
+'''
+
+
+def normalize_phone(phone):
+    """
+    Normalizes phone numbers into digit-only international format.
+    Examples:
+    03001234567      -> 923001234567
+    +923001234567   -> 923001234567
+    +14107263057    -> 14107263057
+    1410-726-3057   -> 14107263057
+    """
+    if not phone:
+        return ""
+
+    # keep digits only
+    p = re.sub(r"\D", "", str(phone))
+
+    # Pakistan local → international
     if p.startswith("03") and len(p) == 11:
         return "92" + p[1:]
 
@@ -3065,6 +3089,7 @@ def detect_voice_or_audio(duration_seconds):
 # ==========================================
 @app.route("/api/external/send_order", methods=["POST"])
 def external_send_order():
+    '''
     try:
         # 1️⃣ SECURITY: Check API Key (Header OR URL)
         # Add API_SECRET="mysecret123" to your .env file
@@ -3222,7 +3247,8 @@ def external_send_order():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
+'''
+    return jsonify({"success": False, "meta_error": resp_json}), 400
 
 ###########
 ###templater syncing

@@ -800,6 +800,11 @@ function openContextMenu(event, el) {
 
     // 🟢 PASTE HANDLER
     msgInput.addEventListener('paste', function(e) {
+      if (!isSessionActive()) {
+       alert("24-hour session expired. Media not allowed.");
+       e.preventDefault();
+       return;
+   }
         const items = (e.clipboardData || e.originalEvent.clipboardData).items;
         for (let item of items) {
             if (item.kind === 'file') {
@@ -964,7 +969,22 @@ function openContextMenu(event, el) {
             try {
                 // 1️⃣ Fetch Data
                 const resp = await fetch(`/history?phone=${currentPhone}`);
+
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    console.error("❌ /history failed", resp.status, text);
+                    return;
+                }
+
+                const contentType = resp.headers.get("content-type") || "";
+                if (!contentType.includes("application/json")) {
+                    const text = await resp.text();
+                    console.error("❌ /history returned non-JSON", text);
+                    return;
+                }
+
                 const msgs = await resp.json();
+
 
                 if (isSending) return;
 
@@ -1429,12 +1449,26 @@ function openContextMenu(event, el) {
     async function startNewChat() { const p=document.getElementById('new-phone').value.replace(/\D/g,''); if(p.length<7)return alert("Invalid"); await fetch('/create_contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:p})}); closeModal('new-chat-modal'); await loadChats(); setTimeout(()=>openChat(p,null),100); }
     function updateSessionTimer() { const t=document.getElementById('session-timer'); const i=document.getElementById('msg-input'); if(!lastUserMsgTime){t.innerText="--";i.disabled=true;i.placeholder="24h session expired";return;} const r=(24*3600*1000)-(new Date()-lastUserMsgTime); if(r>0){ const h=Math.floor(r/3600000); const m=Math.floor((r%3600000)/60000); t.innerText=`${h}:${m<10?'0'+m:m}`; t.classList.remove('session-expired'); i.disabled=false; i.placeholder="Type a message"; } else { t.innerText="00:00"; t.classList.add('session-expired'); i.disabled=true; i.placeholder="Send a template."; } }
     function toggleEmoji() { document.querySelector('emoji-picker').style.display = document.querySelector('emoji-picker').style.display === 'flex' ? 'none' : 'flex'; }
-    function toggleAttach() { document.getElementById('attach-menu').style.display = document.getElementById('attach-menu').style.display === 'flex' ? 'none' : 'flex'; }
+    function toggleAttach() {
+        if (!isSessionActive()) {
+            alert("24-hour session expired. You can only send templates.");
+            return;
+        }
+        const m = document.getElementById('attach-menu');
+        m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+    }
 
         function triggerUpload(t) { toggleAttach(); const input = document.getElementById('hidden-file-input'); input.accept = t==='image'?'image/*,video/*':'*/*'; input.onchange = (e) => prepareUpload(e.target.files[0],t); input.click(); }
     function prepareUpload(f,t) { if(!f||!currentPhone)return; pendingFile=f; if(f.type.startsWith('video'))pendingFileType='video';else if(f.type.startsWith('image'))pendingFileType='image';else pendingFileType='document'; const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=''; if(pendingFileType==='image'){const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img);}else if(pendingFileType==='video'){const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v);}else{c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`;} document.getElementById('preview-modal').style.display='grid'; }
     function cancelUpload() { document.getElementById('preview-modal').style.display='none'; pendingFile=null; document.getElementById('hidden-file-input').value=""; }
-    async function confirmUpload() { if(!pendingFile)return; const cap=document.getElementById('file-caption').value; const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',pendingFile); fd.append('type',pendingFileType); fd.append('caption',cap); document.getElementById('preview-modal').style.display='none'; isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Uploading...`); await fetch('/send_attachment',{method:'POST',body:fd}); pendingFile=null; document.getElementById('hidden-file-input').value=""; setTimeout(()=>{isSending=false;refreshChat(true);},2000); }
+    async function confirmUpload() {
+      if (!isSessionActive()) {
+              alert("24-hour session expired. Use a template.");
+              cancelUpload();
+              return;
+          }
+
+       if(!pendingFile)return; const cap=document.getElementById('file-caption').value; const fd=new FormData(); fd.append('phone',currentPhone); fd.append('file',pendingFile); fd.append('type',pendingFileType); fd.append('caption',cap); document.getElementById('preview-modal').style.display='none'; isSending=true; document.getElementById('messages').insertAdjacentHTML('beforeend',`Uploading...`); await fetch('/send_attachment',{method:'POST',body:fd}); pendingFile=null; document.getElementById('hidden-file-input').value=""; setTimeout(()=>{isSending=false;refreshChat(true);},2000); }
     let recorderMimeType = 'audio/webm'; // Default fallback
 /*
     async function startRecording() {
@@ -1872,6 +1906,10 @@ function openImageViewer(src) { const v=document.getElementById('image-viewer');
 
     return (Date.now() - msgTime) <= ONE_HOUR;
 }
+function isSessionActive() {
+    return lastUserMsgTime && within24Hours(lastUserMsgTime);
+}
+
 </script>
 </body>
 </html>
