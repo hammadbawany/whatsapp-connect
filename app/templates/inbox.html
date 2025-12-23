@@ -520,6 +520,7 @@
 <script>
     // --- STATE VARIABLES ---
     let locallyMarkedUnread = new Set();
+    let chatAbortController = null;
 
     const messageById = new Map();
     let selectedMsg = null;
@@ -933,6 +934,8 @@ function openContextMenu(event, el) {
             });
         }
     // --- CHAT LOGIC ---
+
+  /*
     async function openChat(phone, name) {
             if(currentPhone === phone) return;
             if(chatHistoryTimer) clearInterval(chatHistoryTimer);
@@ -956,7 +959,98 @@ function openContextMenu(event, el) {
             await refreshChat(true);
             chatHistoryTimer = setInterval(refreshChat, 3000);
         }
+        */
 
+        async function openChat(phone, name) {
+    // 🛑 Ignore if same chat
+    if (currentPhone === phone) return;
+
+    // 🛑 STOP previous polling IMMEDIATELY
+    if (chatHistoryTimer) {
+        clearInterval(chatHistoryTimer);
+        chatHistoryTimer = null;
+    }
+
+    // 🔒 Reset render state (important)
+    lastRenderedCount = 0;
+    lastRenderedMessages = [];
+    messageById.clear();
+
+    // 🔒 Set active chat
+    currentPhone = phone;
+
+    // ===============================
+    // 🧠 SIDEBAR UI STATE
+    // ===============================
+    document.querySelectorAll('.chat-item')
+        .forEach(e => e.classList.remove('active'));
+
+    const activeItem = document.getElementById(`chat-item-${phone}`);
+    if (activeItem) {
+        activeItem.classList.add('active');
+
+        // Remove unread badge visually
+        const badge = activeItem.querySelector('.unread-badge');
+        if (badge) badge.remove();
+    }
+
+    // ===============================
+    // 🧾 HEADER UI
+    // ===============================
+    document.getElementById('active-contact').innerText = name || phone;
+    document.getElementById('active-name').innerText = name ? phone : '';
+
+    const headerAvatar = document.getElementById('header-avatar');
+    headerAvatar.style.backgroundColor = getAvatarColor(phone);
+    headerAvatar.innerText = name ? getInitials(name) : '?';
+
+    // ===============================
+    // ⌨️ INPUT STATE
+    // ===============================
+    const input = document.getElementById('msg-input');
+    input.disabled = false;
+    input.placeholder = 'Type a message';
+    input.focus();
+
+    // ===============================
+    // 💬 MESSAGE CONTAINER RESET
+    // (ONLY PLACE WHERE WE WIPE DOM)
+    // ===============================
+    const container = document.getElementById('messages');
+    container.innerHTML = `
+        <div style="text-align:center; padding:50px; color:#8696a0;">
+            Loading messages…
+        </div>
+    `;
+
+    // ===============================
+    // 🔔 UNREAD STATE
+    // ===============================
+    locallyMarkedUnread.delete(phone);
+
+    // ===============================
+    // 📡 MARK READ (BACKEND)
+    // ===============================
+    fetch('/mark_read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+    }).catch(() => {});
+
+    // ===============================
+    // 🔄 INITIAL LOAD (FORCE SCROLL)
+    // ===============================
+    await refreshChat(true);
+
+    // ===============================
+    // ⏱️ START POLLING (SAFE)
+    // ===============================
+    chatHistoryTimer = setInterval(() => {
+        refreshChat(false);
+    }, 3000);
+}
+
+/*
         async function refreshChat(forceScroll = false) {
 
             dbg('refreshChat START', { forceScroll, isNavigatingToReply });
@@ -1017,15 +1111,7 @@ function openContextMenu(event, el) {
 
                 msgs.forEach(m => {
 
-                    console.log('[RENDER MSG]', {
-                        id: m.id,
-                        whatsapp_id: m.whatsapp_id,
-                        message: m.message
-                    });
 
-                    /* =========================
-                       📅 DATE DIVIDER
-                       ========================= */
                     const msgDate = new Date(m.timestamp).toDateString();
 
                     if (msgDate !== lastRenderedDate) {
@@ -1051,9 +1137,9 @@ function openContextMenu(event, el) {
 
                     const isSent = m.sender === 'agent';
 
-                    /* =========================
-                       ⏱ Track last user message
-                       ========================= */
+                    # =========================
+                    #   ⏱ Track last user message
+                    #   =========================
                     if (!isSent) {
                         const ts = parseServerTimestamp(m.timestamp);
                         if (!lastUserMsgTime || ts > lastUserMsgTime) {
@@ -1061,10 +1147,9 @@ function openContextMenu(event, el) {
                         }
                     }
 
-                    /* =========================
-                       🧱 CREATE MESSAGE BUBBLE
-                       (MUST COME BEFORE USING div)
-                       ========================= */
+                    ##       🧱 CREATE MESSAGE BUBBLE
+                    #   (MUST COME BEFORE USING div)
+                    #   =========================
                     const div = document.createElement('div');
                     div.className = `msg ${isSent ? 'sent' : 'received'}`;
 
@@ -1081,7 +1166,7 @@ function openContextMenu(event, el) {
 
                     /* =========================
                        🗑️ DELETE LOGIC
-                       ========================= */
+                       =========================
                     if (m.deleted_for_everyone) {
                         div.classList.add('deleted');
                         content = `
@@ -1106,7 +1191,7 @@ function openContextMenu(event, el) {
 
                         /* =========================
                            📎 MEDIA / TEXT
-                           ========================= */
+                           =========================
                         if (m.media_id) {
                             if (m.media_type === 'audio' || m.media_type === 'voice') {
                                 content = `
@@ -1155,7 +1240,7 @@ function openContextMenu(event, el) {
 
                     /* =========================
                        ↩️ REPLY PREVIEW
-                       ========================= */
+                       =========================
                     let replyHtml = '';
 
                     if (m.reply_to) {
@@ -1214,7 +1299,7 @@ function openContextMenu(event, el) {
 
                     /* =========================
                        🧩 FINAL HTML
-                       ========================= */
+                       =========================
                     const isDeleted = m.deleted_for_me || m.deleted_for_everyone;
 
                     div.innerHTML = `
@@ -1242,6 +1327,211 @@ function openContextMenu(event, el) {
                   console.error('❌ refreshChat crashed:', e);
               }
         }
+*/
+
+async function refreshChat(forceScroll = false) {
+    // 🔒 Snapshot chat identity at start
+    const phoneAtStart = currentPhone;
+
+    dbg('refreshChat START', {
+        phoneAtStart,
+        forceScroll,
+        isNavigatingToReply
+    });
+
+    if (!phoneAtStart || isSending) return;
+
+    // 🛑 Cancel any previous in-flight request
+    if (chatAbortController) {
+        chatAbortController.abort();
+    }
+    chatAbortController = new AbortController();
+
+    let msgs;
+    try {
+        const resp = await fetch(`/history?phone=${phoneAtStart}`, {
+            signal: chatAbortController.signal
+        });
+
+        if (!resp.ok) {
+            const t = await resp.text();
+            console.error('❌ /history failed', resp.status, t);
+            return;
+        }
+
+        const ct = resp.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+            const t = await resp.text();
+            console.error('❌ /history non-JSON', t);
+            return;
+        }
+
+        msgs = await resp.json();
+
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.warn('🟡 refreshChat aborted (expected)');
+            return;
+        }
+        console.error('❌ refreshChat fetch crashed', e);
+        return;
+    }
+
+    // 🔒 DROP STALE RESPONSE
+    if (phoneAtStart !== currentPhone) {
+        console.warn('🟡 STALE refresh DROPPED', phoneAtStart);
+        return;
+    }
+
+    if (!Array.isArray(msgs)) return;
+
+    // 🟢 Optimization: no change, no render
+    if (!forceScroll && msgs.length === lastRenderedCount) {
+        return;
+    }
+
+    // 🔒 Always sort chronologically
+    msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    lastRenderedMessages = msgs;
+    lastRenderedCount = msgs.length;
+
+    const container = document.getElementById('messages');
+
+    // 🔒 Build DOM OFFSCREEN (no flicker)
+    const frag = document.createDocumentFragment();
+
+    // 🔐 Encryption banner
+    const banner = document.createElement('div');
+    banner.style.cssText =
+        'text-align:center;margin:20px;color:#8696a0;font-size:12px;';
+    banner.innerHTML =
+        '<span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.';
+    frag.appendChild(banner);
+
+    let lastRenderedDate = null;
+    lastUserMsgTime = null;
+    messageById.clear();
+
+    for (const m of msgs) {
+        const msgDate = new Date(m.timestamp).toDateString();
+
+        // 📅 Date divider
+        if (msgDate !== lastRenderedDate) {
+            const divider = document.createElement('div');
+            divider.className = 'date-divider';
+
+            const today = new Date().toDateString();
+            const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+            if (msgDate === today) divider.innerText = 'Today';
+            else if (msgDate === yesterday) divider.innerText = 'Yesterday';
+            else {
+                divider.innerText = new Date(m.timestamp).toLocaleDateString(
+                    undefined,
+                    { day: '2-digit', month: 'short', year: 'numeric' }
+                );
+            }
+
+            frag.appendChild(divider);
+            lastRenderedDate = msgDate;
+        }
+
+        const isSent = m.sender === 'agent';
+
+        // ⏱ Track last user message
+        if (!isSent) {
+            const ts = parseServerTimestamp(m.timestamp);
+            if (!lastUserMsgTime || ts > lastUserMsgTime) {
+                lastUserMsgTime = ts;
+            }
+        }
+
+        const div = document.createElement('div');
+        div.className = `msg ${isSent ? 'sent' : 'received'}`;
+
+        if (m.id) {
+            div.dataset.msgId = m.id;
+            messageById.set(String(m.id), m);
+        }
+        if (m.whatsapp_id) {
+            div.dataset.wamid = m.whatsapp_id;
+        }
+
+        let content = '';
+
+        // 🗑️ Deleted
+        if (m.deleted_for_me || m.deleted_for_everyone) {
+            div.classList.add('deleted');
+            content = `
+                <div class="deleted-msg">
+                    ${m.sender === 'agent'
+                        ? 'You deleted this message'
+                        : 'This message was deleted'}
+                </div>
+            `;
+        }
+        // 📎 Media
+        else if (m.media_id) {
+            if (m.media_type === 'audio' || m.media_type === 'voice') {
+                content = `
+                    <audio controls preload="none">
+                        <source src="/media/${m.media_id}">
+                    </audio>
+                `;
+            } else if (m.media_type === 'video') {
+                content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+            } else if (m.media_type === 'document') {
+                content = `
+                    <a href="/media/${m.media_id}" target="_blank">📄 Download document</a>
+                `;
+            } else {
+                content = `
+                    <img src="/media/${m.media_id}"
+                         class="chat-media"
+                         loading="lazy"
+                         onclick="openImageViewer(this.src)">
+                `;
+            }
+
+            if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
+                content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+            }
+        }
+        // 💬 Text
+        else {
+            content = linkify(m.message || '');
+        }
+
+        const time = new Date(m.timestamp).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        const tickHtml = isSent ? getTickHtml(m.status) : '';
+
+        div.innerHTML = `
+            ${!(m.deleted_for_me || m.deleted_for_everyone)
+                ? '<span class="msg-actions" onclick="openContextMenu(event,this)">▾</span>'
+                : ''}
+            ${content}
+            <div class="msg-meta">${time} ${tickHtml}</div>
+        `;
+
+        frag.appendChild(div);
+    }
+
+    // 🔒 ONE atomic DOM replace (no flicker)
+    container.replaceChildren(frag);
+
+    // ⬇️ Scroll
+    if (forceScroll && !isNavigatingToReply) {
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ⏳ Session timer
+    updateSessionTimer();
+}
 
 
     async function sendMessage() {
