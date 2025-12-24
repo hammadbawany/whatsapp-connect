@@ -181,8 +181,8 @@ def get_all_dropbox_folders(dbx, path):
         return []
     return [e.name for e in all_entries if isinstance(e, dropbox.files.FolderMetadata)]
 
-@dropbox_bp.route("/debug/check-orders")
-def debug_check_orders():
+@dropbox_bp.route("/auto_no_response")
+def auto_no_response():
     if "user_id" not in session: return redirect("/login")
 
     user_id = session["user_id"]
