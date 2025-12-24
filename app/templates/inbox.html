@@ -521,6 +521,7 @@
     // --- STATE VARIABLES ---
     let locallyMarkedUnread = new Set();
     let chatAbortController = null;
+    let initialAutoSelectDone = false; // <--- Add this flag
 
     const messageById = new Map();
     let selectedMsg = null;
@@ -1328,7 +1329,7 @@ function openContextMenu(event, el) {
               }
         }
 */
-
+/* v2
 async function refreshChat(forceScroll = false) {
     // 🔒 Snapshot chat identity at start
     const phoneAtStart = currentPhone;
@@ -1532,7 +1533,196 @@ async function refreshChat(forceScroll = false) {
     // ⏳ Session timer
     updateSessionTimer();
 }
+*/
 
+async function refreshChat(forceScroll = false) {
+    // 🔒 Snapshot chat identity at start
+    const phoneAtStart = currentPhone;
+
+    dbg('refreshChat START', { phoneAtStart, forceScroll, isNavigatingToReply });
+
+    // 🛑 If chat changed or currently sending, skip
+    if (!phoneAtStart || isSending) return;
+
+    // 🛑 Cancel previous request to prevent race conditions
+    if (chatAbortController) {
+        chatAbortController.abort();
+    }
+    chatAbortController = new AbortController();
+
+    let msgs;
+    try {
+        const resp = await fetch(`/history?phone=${phoneAtStart}`, {
+            signal: chatAbortController.signal
+        });
+
+        if (!resp.ok) return;
+
+        const ct = resp.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) return;
+
+        msgs = await resp.json();
+
+    } catch (e) {
+        if (e.name !== 'AbortError') console.error(e);
+        return;
+    }
+
+    // 🔒 Double check we are still on the same chat
+    if (phoneAtStart !== currentPhone) return;
+    if (!Array.isArray(msgs)) return;
+
+    // 🔒 Always sort chronologically
+    msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    // --- FIX 1: REMOVED "LENGTH CHECK" OPTIMIZATION ---
+    // We must re-render to show Blue Ticks updates even if message count is same.
+    lastRenderedMessages = msgs;
+    lastRenderedCount = msgs.length;
+
+    const container = document.getElementById('messages');
+
+    // --- FIX 2: SMART SCROLL CHECK ---
+    // Check if user is near bottom BEFORE we replace content
+    const isAtBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 150;
+
+    // 🔒 Build DOM OFFSCREEN (prevents flickering)
+    const frag = document.createDocumentFragment();
+
+    // Encryption banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'text-align:center;margin:20px;color:#8696a0;font-size:12px;';
+    banner.innerHTML = '<span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.';
+    frag.appendChild(banner);
+
+    let lastRenderedDate = null;
+    lastUserMsgTime = null;
+    messageById.clear();
+
+    for (const m of msgs) {
+        // 📅 Date divider
+        const msgDate = new Date(m.timestamp).toDateString();
+        if (msgDate !== lastRenderedDate) {
+            const divider = document.createElement('div');
+            divider.className = 'date-divider';
+            const today = new Date().toDateString();
+            const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+            if (msgDate === today) divider.innerText = 'Today';
+            else if (msgDate === yesterday) divider.innerText = 'Yesterday';
+            else {
+                divider.innerText = new Date(m.timestamp).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+            }
+            frag.appendChild(divider);
+            lastRenderedDate = msgDate;
+        }
+
+        const isSent = m.sender === 'agent';
+
+        // ⏱ Track last user message for session timer
+        if (!isSent) {
+            const ts = parseServerTimestamp(m.timestamp);
+            if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
+        }
+
+        const div = document.createElement('div');
+        div.className = `msg ${isSent ? 'sent' : 'received'}`;
+
+        if (m.id) {
+            div.dataset.msgId = m.id;
+            messageById.set(String(m.id), m);
+        }
+        if (m.whatsapp_id) div.dataset.wamid = m.whatsapp_id;
+
+        // --- FIX 3: RESTORED REPLY PREVIEW LOGIC ---
+        // This entire block was missing in your code
+        let replyHtml = '';
+        if (m.reply_to) {
+            let previewText = '';
+            let previewThumb = '';
+
+            // Handle Text Preview
+            if (m.reply_to.message) {
+                previewText = m.reply_to.message.substring(0, 80);
+            }
+            // Handle Media Preview logic
+            else if (m.reply_to.media_type) {
+                const mediaMap = {
+                    image: '📷 Photo', video: '🎥 Video', audio: '🎵 Audio',
+                    voice: '🎤 Voice message', document: '📄 Document', sticker: '🧩 Sticker'
+                };
+                previewText = mediaMap[m.reply_to.media_type] || '📎 Attachment';
+            } else {
+                previewText = 'Message';
+            }
+
+            // Handle Thumbnail for Images
+            if ((m.reply_to.media_type === 'image' || m.reply_to.media_type === 'video') && m.reply_to.media_id) {
+                previewThumb = `<img src="/media/${m.reply_to.media_id}" class="reply-thumb" loading="lazy" onerror="this.style.display='none'">`;
+            }
+
+            const replyAttr = m.reply_to.whatsapp_id ? `data-reply-id="${m.reply_to.whatsapp_id}"` : '';
+
+            replyHtml = `
+                <div class="reply-preview" ${replyAttr}>
+                    <div class="reply-bar"></div>
+                    <div class="reply-content">
+                        <div class="reply-author">${m.reply_to.sender === 'agent' ? 'You' : 'User'}</div>
+                        <div class="reply-row">
+                            ${previewThumb}
+                            <div class="reply-text">${previewText}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        let content = '';
+        // Handle Deleted Messages
+        if (m.deleted_for_me || m.deleted_for_everyone) {
+            div.classList.add('deleted');
+            content = `<div class="deleted-msg">${m.sender === 'agent' ? 'You deleted this message' : 'This message was deleted'}</div>`;
+        }
+        // Handle Media
+        else if (m.media_id) {
+            if (m.media_type === 'audio' || m.media_type === 'voice') {
+                content = `<audio controls preload="none"><source src="/media/${m.media_id}"></audio>`;
+            } else if (m.media_type === 'video') {
+                content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+            } else if (m.media_type === 'document') {
+                content = `<div style="padding:10px;"><a href="/media/${m.media_id}" target="_blank" style="color:var(--primary-text); text-decoration:none;">📄 Download Document</a></div>`;
+            } else {
+                content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" onclick="openImageViewer(this.src)">`;
+            }
+            if (m.message && m.media_type !== 'audio' && m.media_type !== 'voice') {
+                content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
+            }
+        }
+        // Handle Text
+        else {
+            content = linkify(m.message || '');
+        }
+
+        const time = new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const tickHtml = isSent ? getTickHtml(m.status) : '';
+        const arrowHtml = !(m.deleted_for_me || m.deleted_for_everyone) ? '<span class="msg-actions" onclick="openContextMenu(event,this)">▾</span>' : '';
+
+        // Combine all parts: Arrow + Reply + Content + Metadata
+        div.innerHTML = `${arrowHtml}${replyHtml}${content}<div class="msg-meta">${time} ${tickHtml}</div>`;
+        frag.appendChild(div);
+    }
+
+    // 🔒 SWAP DOM (Atomic update)
+    container.replaceChildren(frag);
+
+    // --- FIX 2.1: APPLY SMART SCROLL ---
+    // If forced OR if user was already at bottom, scroll down.
+    if ((forceScroll || isAtBottom) && !isNavigatingToReply) {
+        container.scrollTop = container.scrollHeight;
+    }
+
+    updateSessionTimer();
+}
 
     async function sendMessage() {
         const txt = msgInput.value.trim();
@@ -2198,6 +2388,45 @@ function openImageViewer(src) { const v=document.getElementById('image-viewer');
 }
 function isSessionActive() {
     return lastUserMsgTime && within24Hours(lastUserMsgTime);
+}
+async function loadChats() {
+    // Don't refresh list if user is typing in search
+    if (document.querySelector('.search-input').value.trim() !== "") return;
+
+    try {
+        const resp = await fetch('/list_users');
+        allChats = await resp.json();
+        renderChatList();
+
+        // --- START: AUTO-OPEN LOGIC ---
+        if (!initialAutoSelectDone) {
+            const params = new URLSearchParams(window.location.search);
+            const targetPhone = params.get('phone');
+
+            if (targetPhone) {
+                console.log("🔗 Auto-opening chat from URL:", targetPhone);
+
+                // Check if this number exists in our chat list to get the Name
+                const existingChat = allChats.find(c => c.phone === targetPhone);
+                const name = existingChat ? existingChat.name : null;
+
+                // Open the chat immediately
+                // Note: We use a small timeout to ensure the DOM is ready
+                setTimeout(() => {
+                    openChat(targetPhone, name);
+
+                    // Scroll sidebar to this chat
+                    const chatItem = document.getElementById(`chat-item-${targetPhone}`);
+                    if (chatItem) chatItem.scrollIntoView({block: 'center'});
+                }, 100);
+            }
+
+            // Mark as done so it doesn't keep resetting while you use the app
+            initialAutoSelectDone = true;
+        }
+        // --- END: AUTO-OPEN LOGIC ---
+
+    } catch(e) { console.error("Load Chats Failed", e); }
 }
 
 </script>

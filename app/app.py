@@ -23,18 +23,31 @@ TARGET_WABA_ID = "1628402398537645"
 from r2_client import get_r2_client
 import time
 import re
+import dropbox
+import urllib.parse
+from plugins.dropbox_plugin import dropbox_bp
+from flask import Blueprint, request, redirect, session, jsonify, render_template
 
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
 print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
 print("BOOT PHONE:", os.getenv("WA_PHONE"))
 app = Flask(__name__)
+app.register_blueprint(dropbox_bp)
+
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-this")
 VERIFY_TOKEN = "lifafay123"
 WHATSAPP_TOKEN = os.getenv("WA_TOKEN")
 
 PHONE_NUMBER_ID = os.getenv("WA_PHONE")
 WABA_ID = os.getenv("WA_WABA_ID")
+
+
+APP_KEY = "lns4lbjw0ka6sen"
+REDIRECT_URI = "http://127.0.0.1:5000/dropbox/callback"
+
+
+
 
 def log(title, payload):
     print("\n" + "=" * 80)
