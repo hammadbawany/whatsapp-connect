@@ -47,7 +47,27 @@ APP_KEY = "lns4lbjw0ka6sen"
 REDIRECT_URI = "http://127.0.0.1:5000/dropbox/callback"
 
 
+@app.route("/")
+def index():
+    # 1. Not Logged In? -> Login
+    if "user_id" not in session:
+        return redirect(url_for("login"))
 
+    # 2. Logged In? Check for WhatsApp Connection
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM whatsapp_accounts LIMIT 1")
+    account = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if account:
+        # 3. Connected -> SHOW DASHBOARD (New Behavior)
+        # Make sure you created 'home.html' in the templates folder!
+        return render_template("home.html")
+    else:
+        # 4. Not Connected -> Go to Onboarding
+        return redirect(url_for("connect_page"))
 
 def log(title, payload):
     print("\n" + "=" * 80)
@@ -2428,27 +2448,7 @@ def get_account_context(whatsapp_account_id):
     return row
 
 
-@app.route("/")
-def index():
-    # 1. Not Logged In? -> Login
-    if "user_id" not in session:
-        return redirect(url_for("login"))
 
-    # 2. Logged In? Check for WhatsApp Connection
-    conn = get_conn()
-    cur = conn.cursor()
-    # Check if we have at least one account linked
-    cur.execute("SELECT id FROM whatsapp_accounts LIMIT 1")
-    account = cur.fetchone()
-    cur.close()
-    conn.close()
-
-    if account:
-        # 3. Connected -> Go to Inbox
-        return redirect(url_for("inbox"))
-    else:
-        # 4. Not Connected -> Go to Onboarding
-        return redirect(url_for("connect_page"))
 '''
 @app.route("/connect")
 @login_required
