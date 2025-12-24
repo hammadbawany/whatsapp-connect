@@ -18,7 +18,7 @@ assert APP_SECRET, "DROPBOX_APP_SECRET missing"
 assert REDIRECT_URI, "DROPBOX_REDIRECT_URI missing"
 
 # ==========================================
-# 1. AUTHENTICATION (Standard)
+# 1. AUTHENTICATION
 # ==========================================
 
 @dropbox_bp.route("/dropbox/connect")
@@ -54,7 +54,6 @@ def dropbox_callback():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Upsert tokens
     if refresh_token:
         cur.execute("""
             INSERT INTO dropbox_accounts (user_id, access_token, refresh_token)
@@ -128,44 +127,61 @@ def save_tokens(user_id, access_token, refresh_token):
 
 def parse_folder_data(folder_name):
     """
-    Extracts Phone, Code, Source, Name.
-    Structure: Phone --- Code --- ID --- Source --- Name --- City
+    Extracts Data from folder name.
+    Identifies ALL potential phone numbers (International & Local).
     """
-    # 1. Phone extraction (Keep existing logic)
-    phone = None
-    phone_match = re.search(r'(\+92\d{10}|92\d{10}|03\d{9}|3\d{9})', folder_name)
+    # 1. FIND ALL NUMBERS (Not just the first one)
+    # This regex captures the Prefix (+ or 00) and the Digits (10-15 long) separately
+    phone_iterator = re.finditer(r'(?:\s|^|\-)(\+|00)?(\d{10,15})(?:\s|$|\-)', folder_name)
 
-    if phone_match:
-        raw = phone_match.group(1)
-        if raw.startswith("+"): phone = raw[1:]
-        elif raw.startswith("03"): phone = "92" + raw[1:]
-        elif raw.startswith("3") and len(raw) == 10: phone = "92" + raw
-        else: phone = raw
+    found_phones = []
 
-    # 2. Order Code
+    for match in phone_iterator:
+        prefix = match.group(1) # e.g. "00" or "+"
+        raw_digits = match.group(2) # e.g. "14053149782"
+
+        normalized = raw_digits
+
+        # Logic to handle Pakistan 03... -> 923...
+        # Only apply if it looks exactly like a local mobile number
+        if raw_digits.startswith("03") and len(raw_digits) == 11:
+            normalized = "92" + raw_digits[1:]
+
+        # Logic for "3..." -> "923..." (Missing leading zero)
+        elif raw_digits.startswith("3") and len(raw_digits) == 10:
+            normalized = "92" + raw_digits
+
+        # For International (e.g. 0014... or +14...), we simply keep the digits
+        # because 'raw_digits' group excludes the 00/+ already.
+
+        found_phones.append(normalized)
+
+    # Remove duplicates
+    found_phones = list(set(found_phones))
+
+    # 2. Extract Order Code
     order_code = None
     code_match = re.search(r'---\s*(\d{5})\s*---', folder_name)
     if code_match:
         order_code = code_match.group(1)
 
-    # 3. Extract Source & Name (Splitting by dashes)
+    # 3. Extract Source & Name
+    # Structure: Phone --- Code --- ID --- Source --- Name --- City
     parts = re.split(r'\s*-{2,3}\s*', folder_name)
 
     source = "Unknown"
     customer_name = "Unknown"
 
-    # Based on structure:
-    # 0: Phone | 1: Code | 2: ID | 3: Source | 4: Name | 5: City
     if len(parts) >= 4:
-        source = parts[3].strip()  # Extracts 'website', 'insta', etc.
+        source = parts[3].strip()
     if len(parts) >= 5:
         customer_name = parts[4].strip()
 
     return {
         "folder_name": folder_name,
-        "phone": phone,
+        "phones": found_phones,  # List of all candidates
         "order_code": order_code,
-        "source": source,          # <--- Added Source
+        "source": source,
         "customer_name": customer_name
     }
 
@@ -194,29 +210,32 @@ def auto_no_response():
 
     parsed_folders = []
     unparsed_folders = []
-    phones_to_check = set()
+
+    # We collect ALL candidate phones from ALL folders to check in one DB query
+    all_candidate_phones = set()
 
     # 2. Parse Data
     for name in folder_names:
         data = parse_folder_data(name)
-        if data["phone"]:
+        if data["phones"]:
             parsed_folders.append(data)
-            # Use last 10 digits for matching
-            phones_to_check.add(data["phone"][-10:])
+            # Add last 10 digits of each candidate to check list
+            for p in data["phones"]:
+                all_candidate_phones.add(p[-10:])
         else:
             unparsed_folders.append(name)
 
     # 3. Check Database
     responded_short_numbers = set()
 
-    if phones_to_check:
+    if all_candidate_phones:
         conn = get_conn()
         cur = conn.cursor()
 
-        check_list = list(phones_to_check)
+        check_list = list(all_candidate_phones)
         format_strings = ','.join(['%s'] * len(check_list))
 
-        # Check where sender is explicitly 'customer'
+        # Check if ANY of these numbers exist in our messages table
         query = f"""
             SELECT DISTINCT RIGHT(user_phone, 10) as short_phone
             FROM messages
@@ -236,19 +255,36 @@ def auto_no_response():
         cur.close()
         conn.close()
 
-    # 4. Separate Results
+    # 4. Match & Separate Results
     users_responded = []
     users_no_response = []
 
     for item in parsed_folders:
-        short_phone = item["phone"][-10:]
+        # Determine which of the candidate phones is the "Real" one
+        # Rule: Use the one that is in the DB. If none, use the first one.
 
-        if short_phone in responded_short_numbers:
-            users_responded.append(item)
+        active_phone = item["phones"][0] # Default to first found
+        is_responded = False
+
+        for p in item["phones"]:
+            if p[-10:] in responded_short_numbers:
+                active_phone = p
+                is_responded = True
+                break
+
+        display_data = {
+            "phone": active_phone,
+            "order_code": item["order_code"],
+            "source": item["source"],
+            "customer_name": item["customer_name"]
+        }
+
+        if is_responded:
+            users_responded.append(display_data)
         else:
-            users_no_response.append(item)
+            users_no_response.append(display_data)
 
-    # 5. Render the HTML File
+    # 5. Render HTML
     return render_template(
         "dropbox_orders.html",
         total=len(folder_names),
