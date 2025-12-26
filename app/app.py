@@ -960,9 +960,15 @@ def agents():
 def inbox():
     return render_template("inbox.html")
 
-if __name__ == "__main__":
-    app.run(debug=True)
+#if __name__ == "__main__":
+#    app.run(debug=True)
 
+if __name__ == "__main__":
+    # CHANGE THIS LINE:
+    # app.run(debug=True, port=5000)
+
+    # TO THIS:
+    app.run(debug=True, threaded=True, port=5000)
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
