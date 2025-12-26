@@ -5,7 +5,7 @@ import urllib.parse
 import re
 from flask import Blueprint, request, redirect, session, jsonify, render_template
 from db import get_conn
-
+from datetime import datetime, timedelta
 dropbox_bp = Blueprint("dropbox", __name__)
 
 # --- CONFIGURATION ---
@@ -297,4 +297,140 @@ def auto_no_response():
         responded=users_responded,
         no_response=users_no_response,
         unparsed=unparsed_folders
+    )
+
+
+@dropbox_bp.route("/auto_correction_status")
+def auto_correction_status():
+    if "user_id" not in session: return redirect("/login")
+
+    user_id = session["user_id"]
+    dbx = get_user_dropbox_client(user_id)
+
+    # 1. Define Paths
+    target_paths = [
+        "/1 daniyal/Auto/send to customer/Correction done",
+        "/1 daniyal/Auto/send to customer"
+    ]
+
+    # Folders to completely ignore (Exact name, case-insensitive)
+    ignored_folders = {
+        "instagram", "no reply", "confirm", "file issues",
+        "cancelled orders", "correction done", "faraz corrections"
+    }
+
+    # 2. Get Folders
+    folder_names = []
+    for path in target_paths:
+        current_folders = get_all_dropbox_folders(dbx, path)
+        folder_names.extend(current_folders)
+
+    folder_names = list(set(folder_names))
+
+    parsed_folders = []
+    unparsed_list = []
+    all_candidate_phones = set()
+
+    for name in folder_names:
+        # SKIP IGNORED FOLDERS
+        if name.lower() in ignored_folders:
+            continue
+
+        data = parse_folder_data(name)
+        if data["phones"]:
+            parsed_folders.append(data)
+            for p in data["phones"]:
+                all_candidate_phones.add(p[-10:])
+        else:
+            # Only add to unparsed if not ignored
+            unparsed_list.append(name)
+
+    # 3. Check DB
+    phone_timestamps = {}
+
+    if all_candidate_phones:
+        conn = get_conn()
+        cur = conn.cursor()
+        check_list = list(all_candidate_phones)
+        format_strings = ','.join(['%s'] * len(check_list))
+
+        query = f"""
+            SELECT RIGHT(user_phone, 10) as short_phone, MAX(timestamp) as last_inbound
+            FROM messages
+            WHERE sender = 'customer'
+            AND RIGHT(user_phone, 10) IN ({format_strings})
+            GROUP BY RIGHT(user_phone, 10)
+        """
+        cur.execute(query, tuple(check_list))
+        rows = cur.fetchall()
+        for row in rows:
+            if isinstance(row, dict): phone_timestamps[row['short_phone']] = row['last_inbound']
+            else: phone_timestamps[row[0]] = row[1]
+        cur.close(); conn.close()
+
+    # 4. Calculate Time & Sort
+    active_list = []
+    expired_list = []
+    no_chat_list = []
+
+    now_utc = datetime.utcnow()
+
+    for item in parsed_folders:
+        matched_time = None
+        active_phone = item["phones"][0]
+
+        for p in item["phones"]:
+            short_p = p[-10:]
+            if short_p in phone_timestamps:
+                matched_time = phone_timestamps[short_p]
+                active_phone = p
+                break
+
+        display_data = {
+            "phone": active_phone,
+            "order_code": item["order_code"],
+            "customer_name": item["customer_name"],
+            "folder_name": item["folder_name"]
+        }
+
+        if matched_time:
+            pkt_time = matched_time + timedelta(hours=5)
+            display_data["last_msg_time"] = pkt_time.strftime("%d %b %I:%M %p")
+
+            window_close_time = matched_time + timedelta(hours=24)
+            time_left = window_close_time - now_utc
+            total_seconds = time_left.total_seconds()
+
+            if total_seconds > 0:
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                display_data["time_str"] = f"{hours}h {minutes}m"
+                display_data["seconds_left"] = total_seconds
+                display_data["hours_left"] = hours
+                active_list.append(display_data)
+            else:
+                expired_seconds = abs(total_seconds)
+                hours = int(expired_seconds // 3600)
+                display_data["time_str"] = f"{hours}h"
+                display_data["seconds_expired"] = expired_seconds
+                expired_list.append(display_data)
+        else:
+            no_chat_list.append(display_data)
+
+    active_list.sort(key=lambda x: x["seconds_left"])
+    expired_list.sort(key=lambda x: x["seconds_expired"])
+
+    urgent_count = sum(1 for x in active_list if x["hours_left"] < 4)
+
+    return render_template(
+        "correction_status.html",
+        active_list=active_list,
+        expired_list=expired_list,
+        no_chat_list=no_chat_list,
+        unparsed_list=unparsed_list,
+        urgent_count=urgent_count,
+        active_count=len(active_list),
+        expired_count=len(expired_list),
+        no_chat_count=len(no_chat_list),
+        unparsed_count=len(unparsed_list)
     )
