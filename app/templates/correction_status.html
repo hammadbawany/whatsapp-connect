@@ -16,6 +16,8 @@
         .expired { border-left: 5px solid #6c757d; background-color: #f8f9fa; opacity: 0.85; }
         .stat-card { text-align: center; padding: 20px; }
         .stat-num { font-size: 2rem; font-weight: bold; }
+        .path-box { font-size: 0.75em; color: #6c757d; background: #e9ecef; padding: 4px 8px; border-radius: 4px; display: block; margin-top: 5px; font-family: monospace; word-break: break-all; }
+        .badge-folder { font-size: 0.75em; background-color: #607d8b; color: white; margin-bottom: 5px; display: inline-block; }
     </style>
 </head>
 <body>
@@ -56,38 +58,39 @@
             </div>
         </div>
     </div>
-    <!-- SECTION: UNPARSED / ERROR (NEW) -->
-    <!-- SECTION: UNPARSED / CHECK MANUALLY -->
-        {% if unparsed_list %}
-        <div class="card border-danger mb-4">
-            <div class="card-header bg-danger text-white">
-                <h5 class="mb-0"><i class="bi bi-hand-index-thumb"></i> Check Manually (Unparsed Folders)</h5>
-            </div>
-            <div class="card-body">
-                <div class="alert alert-light text-danger border-danger">
-                    <i class="bi bi-exclamation-circle"></i> The system could not extract a valid phone number from these <strong>{{ unparsed_count }} folders</strong>.
-                </div>
-                <ul class="list-group">
-                    {% for folder in unparsed_list %}
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span>{{ folder }}</span>
-                        <span class="badge bg-danger">Error</span>
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-        </div>
-        {% endif %}
 
-    <!-- SECTION 1: ACTIVE WINDOWS -->
+    <!-- UNPARSED -->
+    {% if unparsed_list %}
+    <div class="card border-danger mb-4">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0"><i class="bi bi-hand-index-thumb"></i> Check Manually (Unparsed Folders)</h5>
+        </div>
+        <div class="card-body">
+            <ul class="list-group">
+                {% for item in unparsed_list %}
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between">
+                        <span class="text-danger fw-bold">{{ item.name }}</span>
+                        <span class="badge bg-secondary">{{ item.parent }}</span>
+                    </div>
+                    <small class="path-box">{{ item.full_path }}</small>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ACTIVE WINDOWS -->
     {% if active_list %}
     <h5 class="mb-3 text-success fw-bold">🟢 Open Windows (Reply Priority)</h5>
     <div class="row">
         {% for item in active_list %}
         <div class="col-12 mb-2">
             <div class="card p-3 {{ 'urgent' if item.hours_left < 4 else 'safe' }}">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
+                <div class="d-flex justify-content-between align-items-start">
+                    <div style="flex: 1; padding-right: 10px;">
+                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
                         <h5 class="mb-1">{{ item.customer_name }}</h5>
                         <div class="text-muted small">
                             <i class="bi bi-folder"></i> {{ item.order_code }} |
@@ -96,8 +99,9 @@
                         <div class="mt-1" style="font-size: 0.85em; color: #555;">
                             <i class="bi bi-clock-history"></i> Last Msg: <strong>{{ item.last_msg_time }}</strong>
                         </div>
+                        <span class="path-box">{{ item.full_path }}</span>
                     </div>
-                    <div class="text-end">
+                    <div class="text-end" style="min-width: 140px;">
                         <div class="badge {{ 'bg-danger' if item.hours_left < 4 else 'bg-success' }} badge-timer mb-2">
                             <i class="bi bi-hourglass-split"></i> {{ item.time_str }} Left
                         </div>
@@ -113,7 +117,7 @@
     </div>
     {% endif %}
 
-    <!-- SECTION 2: NO CHAT FOUND (MOVED HERE) -->
+    <!-- NO CHAT HISTORY -->
     {% if no_chat_list %}
     <h5 class="mt-5 mb-3 text-dark fw-bold">❓ No Chat History (Check Manually)</h5>
     <div class="row">
@@ -121,10 +125,12 @@
         <div class="col-12 mb-2">
             <div class="card p-3 no-chat">
                 <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="mb-1 fw-bold">{{ item.customer_name }}</h6>
+                    <div style="overflow: hidden;">
+                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                        <h6 class="mb-1 fw-bold text-truncate">{{ item.customer_name }}</h6>
                         <span class="badge bg-dark">{{ item.order_code }}</span>
                         <span class="ms-2 text-muted small"><i class="bi bi-phone"></i> {{ item.phone }}</span>
+                        <span class="path-box mt-2">{{ item.full_path }}</span>
                     </div>
                     <div>
                         <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-outline-dark">
@@ -132,14 +138,13 @@
                         </a>
                     </div>
                 </div>
-                <div class="text-muted small mt-2 text-truncate">{{ item.folder_name }}</div>
             </div>
         </div>
         {% endfor %}
     </div>
     {% endif %}
 
-    <!-- SECTION 3: EXPIRED / CLOSED -->
+    <!-- EXPIRED -->
     {% if expired_list %}
     <h5 class="mt-5 mb-3 text-secondary fw-bold">🔒 Window Closed (Send Template)</h5>
     <div class="row">
@@ -147,12 +152,14 @@
         <div class="col-12 mb-2">
             <div class="card p-3 expired">
                 <div class="d-flex justify-content-between align-items-center">
-                    <div>
+                    <div style="overflow: hidden;">
+                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
                         <h6 class="mb-1 text-muted">{{ item.customer_name }}</h6>
                         <div class="text-muted small">
                             <span class="badge bg-secondary">{{ item.order_code }}</span>
                             <span class="ms-1"><i class="bi bi-clock"></i> Last Msg: {{ item.last_msg_time }}</span>
                         </div>
+                        <span class="path-box mt-2">{{ item.full_path }}</span>
                     </div>
                     <div>
                         <span class="text-danger small me-3 fw-bold">Expired {{ item.time_str }} ago</span>

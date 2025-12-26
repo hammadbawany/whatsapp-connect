@@ -313,37 +313,44 @@ def auto_correction_status():
         "/1 daniyal/Auto/send to customer"
     ]
 
-    # Folders to completely ignore (Exact name, case-insensitive)
-    ignored_folders = {
-        "instagram", "no reply", "confirm", "file issues",
-        "cancelled orders", "correction done", "faraz corrections"
-    }
+    # 2. Get Folders with Path Context
+    folders_data = {} # Use dict to dedup by folder name
 
-    # 2. Get Folders
-    folder_names = []
     for path in target_paths:
-        current_folders = get_all_dropbox_folders(dbx, path)
-        folder_names.extend(current_folders)
+        current_names = get_all_dropbox_folders(dbx, path)
+        parent_name = path.split("/")[-1] # e.g. "Correction done"
 
-    folder_names = list(set(folder_names))
+        for name in current_names:
+            # Skip ignored folders immediately
+            if name.lower() in ["instagram", "no reply", "confirm", "file issues", "cancelled orders", "correction done", "faraz corrections"]:
+                continue
+
+            folders_data[name] = {
+                "name": name,
+                "parent": parent_name,
+                "full_path": path + "/" + name
+            }
 
     parsed_folders = []
     unparsed_list = []
     all_candidate_phones = set()
 
-    for name in folder_names:
-        # SKIP IGNORED FOLDERS
-        if name.lower() in ignored_folders:
-            continue
-
+    # Iterate over unique folders
+    for name, info in folders_data.items():
         data = parse_folder_data(name)
+
+        # Inject Path Info into the parsed data object
+        data["parent_folder"] = info["parent"]
+        data["full_path"] = info["full_path"]
+
         if data["phones"]:
             parsed_folders.append(data)
             for p in data["phones"]:
                 all_candidate_phones.add(p[-10:])
         else:
-            # Only add to unparsed if not ignored
-            unparsed_list.append(name)
+            # Add path info to unparsed item too
+            unparsed_item = {"name": name, "full_path": info["full_path"], "parent": info["parent"]}
+            unparsed_list.append(unparsed_item)
 
     # 3. Check DB
     phone_timestamps = {}
@@ -390,7 +397,9 @@ def auto_correction_status():
             "phone": active_phone,
             "order_code": item["order_code"],
             "customer_name": item["customer_name"],
-            "folder_name": item["folder_name"]
+            "folder_name": item["folder_name"],
+            "full_path": item["full_path"],       # <--- Added
+            "parent_folder": item["parent_folder"] # <--- Added
         }
 
         if matched_time:
