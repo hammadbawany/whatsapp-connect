@@ -122,41 +122,27 @@ def save_tokens(user_id, access_token, refresh_token):
     conn.close()
 
 # ==========================================
+# ==========================================
 # 3. MAIN LOGIC (PARSING & DB CHECK)
 # ==========================================
 
 def parse_folder_data(folder_name):
     """
-    Extracts Data from folder name.
-    Identifies ALL potential phone numbers (International & Local).
+    Dynamically finds Source (WhatsApp/Website) and Name.
     """
-    # 1. FIND ALL NUMBERS (Not just the first one)
-    # This regex captures the Prefix (+ or 00) and the Digits (10-15 long) separately
+    # 1. FIND ALL NUMBERS
     phone_iterator = re.finditer(r'(?:\s|^|\-)(\+|00)?(\d{10,15})(?:\s|$|\-)', folder_name)
-
     found_phones = []
 
     for match in phone_iterator:
-        prefix = match.group(1) # e.g. "00" or "+"
-        raw_digits = match.group(2) # e.g. "14053149782"
-
+        raw_digits = match.group(2)
         normalized = raw_digits
-
-        # Logic to handle Pakistan 03... -> 923...
-        # Only apply if it looks exactly like a local mobile number
         if raw_digits.startswith("03") and len(raw_digits) == 11:
             normalized = "92" + raw_digits[1:]
-
-        # Logic for "3..." -> "923..." (Missing leading zero)
         elif raw_digits.startswith("3") and len(raw_digits) == 10:
             normalized = "92" + raw_digits
-
-        # For International (e.g. 0014... or +14...), we simply keep the digits
-        # because 'raw_digits' group excludes the 00/+ already.
-
         found_phones.append(normalized)
 
-    # Remove duplicates
     found_phones = list(set(found_phones))
 
     # 2. Extract Order Code
@@ -165,21 +151,43 @@ def parse_folder_data(folder_name):
     if code_match:
         order_code = code_match.group(1)
 
-    # 3. Extract Source & Name
-    # Structure: Phone --- Code --- ID --- Source --- Name --- City
-    parts = re.split(r'\s*-{2,3}\s*', folder_name)
+    # 3. Extract Source & Name (Robust Split)
+    parts = re.split(r'\s*-{2,3}\s*|\s+--\s+', folder_name)
+    parts = [p.strip() for p in parts if p.strip()]
 
     source = "Unknown"
     customer_name = "Unknown"
 
-    if len(parts) >= 4:
-        source = parts[3].strip()
-    if len(parts) >= 5:
-        customer_name = parts[4].strip()
+    keywords = ['website', 'whatsapp', 'instagram', 'facebook', 'complain']
+
+    source_index = -1
+
+    # Search for keywords
+    for i, part in enumerate(parts):
+        # Skip if looks like phone or code
+        if i == 0 and re.search(r'\d{10}', part): continue
+        if re.match(r'^\d{5}$', part): continue
+
+        val = part.lower()
+        if any(k in val for k in keywords):
+            source_index = i
+            # Normalize Source Name
+            if 'whats' in val or 'wa' == val: source = 'WhatsApp'
+            elif 'web' in val: source = 'Website'
+            elif 'insta' in val: source = 'Instagram'
+            else: source = part.title()
+            break
+
+    if source_index != -1 and len(parts) > source_index + 1:
+        customer_name = parts[source_index + 1]
+    elif len(parts) >= 4:
+         if not re.search(r'\d', parts[2]):
+             source = parts[2]
+             customer_name = parts[3]
 
     return {
         "folder_name": folder_name,
-        "phones": found_phones,  # List of all candidates
+        "phones": found_phones,
         "order_code": order_code,
         "source": source,
         "customer_name": customer_name
@@ -193,8 +201,7 @@ def get_all_dropbox_folders(dbx, path):
         while result.has_more:
             result = dbx.files_list_folder_continue(result.cursor)
             all_entries.extend(result.entries)
-    except dropbox.exceptions.ApiError:
-        return []
+    except dropbox.exceptions.ApiError: return []
     return [e.name for e in all_entries if isinstance(e, dropbox.files.FolderMetadata)]
 
 @dropbox_bp.route("/auto_no_response")
@@ -210,8 +217,6 @@ def auto_no_response():
 
     parsed_folders = []
     unparsed_folders = []
-
-    # We collect ALL candidate phones from ALL folders to check in one DB query
     all_candidate_phones = set()
 
     # 2. Parse Data
@@ -219,7 +224,6 @@ def auto_no_response():
         data = parse_folder_data(name)
         if data["phones"]:
             parsed_folders.append(data)
-            # Add last 10 digits of each candidate to check list
             for p in data["phones"]:
                 all_candidate_phones.add(p[-10:])
         else:
@@ -229,47 +233,38 @@ def auto_no_response():
     responded_short_numbers = set()
 
     if all_candidate_phones:
-        conn = get_conn()
-        cur = conn.cursor()
-
+        conn = get_conn(); cur = conn.cursor()
         check_list = list(all_candidate_phones)
         format_strings = ','.join(['%s'] * len(check_list))
 
-        # Check if ANY of these numbers exist in our messages table
+        # Check messages table
         query = f"""
             SELECT DISTINCT RIGHT(user_phone, 10) as short_phone
             FROM messages
             WHERE sender = 'customer'
             AND RIGHT(user_phone, 10) IN ({format_strings})
         """
-
         cur.execute(query, tuple(check_list))
         rows = cur.fetchall()
 
         if rows:
-            if isinstance(rows[0], dict):
-                responded_short_numbers = {row['short_phone'] for row in rows}
-            else:
-                responded_short_numbers = {row[0] for row in rows}
+            if isinstance(rows[0], dict): responded_short_numbers = {row['short_phone'] for row in rows}
+            else: responded_short_numbers = {row[0] for row in rows}
+        cur.close(); conn.close()
 
-        cur.close()
-        conn.close()
-
-    # 4. Match & Separate Results
+    # 4. CATEGORIZE
     users_responded = []
     users_no_response = []
 
     for item in parsed_folders:
-        # Determine which of the candidate phones is the "Real" one
-        # Rule: Use the one that is in the DB. If none, use the first one.
+        active_phone = item["phones"][0]
+        phone_match_in_db = False
 
-        active_phone = item["phones"][0] # Default to first found
-        is_responded = False
-
+        # Check DB match
         for p in item["phones"]:
             if p[-10:] in responded_short_numbers:
                 active_phone = p
-                is_responded = True
+                phone_match_in_db = True
                 break
 
         display_data = {
@@ -279,12 +274,23 @@ def auto_no_response():
             "customer_name": item["customer_name"]
         }
 
-        if is_responded:
+        # --- NEW LOGIC ---
+        source_lower = item["source"].lower()
+        is_website = "website" in source_lower
+
+        if not is_website:
+            # Rule 1: NOT Website (WhatsApp, Insta, etc.) -> Automatically "Replied"
             users_responded.append(display_data)
+
+        elif is_website and phone_match_in_db:
+            # Rule 2: Website AND user messaged us -> "Replied"
+            users_responded.append(display_data)
+
         else:
+            # Rule 3: Website AND NO message -> "No Response" (Waiting)
             users_no_response.append(display_data)
 
-    # 5. Render HTML
+    # 5. Render
     return render_template(
         "dropbox_orders.html",
         total=len(folder_names),
