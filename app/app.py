@@ -27,6 +27,7 @@ import dropbox
 import urllib.parse
 from plugins.dropbox_plugin import dropbox_bp
 from flask import Blueprint, request, redirect, session, jsonify, render_template
+from plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
 
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
 print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
@@ -34,6 +35,7 @@ print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
 print("BOOT PHONE:", os.getenv("WA_PHONE"))
 app = Flask(__name__)
 app.register_blueprint(dropbox_bp)
+app.register_blueprint(design_sender_bp)  # <--- ADD THIS
 
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-this")
 VERIFY_TOKEN = "lifafay123"

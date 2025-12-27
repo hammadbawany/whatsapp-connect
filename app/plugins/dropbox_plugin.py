@@ -7,6 +7,9 @@ from flask import Blueprint, request, redirect, session, jsonify, render_templat
 from db import get_conn
 from datetime import datetime, timedelta
 dropbox_bp = Blueprint("dropbox", __name__)
+import tempfile
+import mimetypes
+from werkzeug.utils import secure_filename
 
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
@@ -210,34 +213,38 @@ def auto_no_response():
 
     user_id = session["user_id"]
     dbx = get_user_dropbox_client(user_id)
-    path = "/1 daniyal/Auto"
+    base_path = "/1 daniyal/Auto"
 
     # 1. Get Folders
-    folder_names = get_all_dropbox_folders(dbx, path)
+    folder_names = get_all_dropbox_folders(dbx, base_path)
 
     parsed_folders = []
     unparsed_folders = []
     all_candidate_phones = set()
 
-    # 2. Parse Data
     for name in folder_names:
         data = parse_folder_data(name)
+        data["full_path"] = f"{base_path}/{name}"
+
         if data["phones"]:
             parsed_folders.append(data)
-            for p in data["phones"]:
-                all_candidate_phones.add(p[-10:])
+            for p in data["phones"]: all_candidate_phones.add(p[-10:])
         else:
-            unparsed_folders.append(name)
+            data["name"] = name
+            unparsed_folders.append(data)
 
-    # 3. Check Database
+    # 2. Check Database
     responded_short_numbers = set()
+    sent_folders_set = set()
+
+    conn = get_conn()
+    cur = conn.cursor() # Standard cursor (tuples) or DictCursor based on config
 
     if all_candidate_phones:
-        conn = get_conn(); cur = conn.cursor()
         check_list = list(all_candidate_phones)
         format_strings = ','.join(['%s'] * len(check_list))
 
-        # Check messages table
+        # Explicitly selecting column alias
         query = f"""
             SELECT DISTINCT RIGHT(user_phone, 10) as short_phone
             FROM messages
@@ -247,12 +254,30 @@ def auto_no_response():
         cur.execute(query, tuple(check_list))
         rows = cur.fetchall()
 
-        if rows:
-            if isinstance(rows[0], dict): responded_short_numbers = {row['short_phone'] for row in rows}
-            else: responded_short_numbers = {row[0] for row in rows}
-        cur.close(); conn.close()
+        # --- CRITICAL FIX START ---
+        for row in rows:
+            # Check the type of row to handle RealDictCursor vs TupleCursor safely
+            if isinstance(row, dict):
+                val = row['short_phone']
+            else:
+                val = row[0]
 
-    # 4. CATEGORIZE
+            if val: responded_short_numbers.add(val)
+        # --- CRITICAL FIX END ---
+
+    # Fetch Sent Log
+    try:
+        cur.execute("SELECT folder_name FROM design_sent_log")
+        rows = cur.fetchall()
+        for row in rows:
+            if isinstance(row, dict): val = row['folder_name']
+            else: val = row[0]
+            sent_folders_set.add(val)
+    except: pass
+
+    cur.close(); conn.close()
+
+    # 3. CATEGORIZE
     users_responded = []
     users_no_response = []
 
@@ -260,7 +285,6 @@ def auto_no_response():
         active_phone = item["phones"][0]
         phone_match_in_db = False
 
-        # Check DB match
         for p in item["phones"]:
             if p[-10:] in responded_short_numbers:
                 active_phone = p
@@ -271,34 +295,30 @@ def auto_no_response():
             "phone": active_phone,
             "order_code": item["order_code"],
             "source": item["source"],
-            "customer_name": item["customer_name"]
+            "customer_name": item["customer_name"],
+            "folder_name": item["folder_name"],
+            "full_path": item["full_path"],
+            "is_sent": item["folder_name"] in sent_folders_set
         }
 
-        # --- NEW LOGIC ---
         source_lower = item["source"].lower()
-        is_website = "website" in source_lower
+        is_website = "website" in source_lower or "web" in source_lower
 
         if not is_website:
-            # Rule 1: NOT Website (WhatsApp, Insta, etc.) -> Automatically "Replied"
             users_responded.append(display_data)
-
         elif is_website and phone_match_in_db:
-            # Rule 2: Website AND user messaged us -> "Replied"
             users_responded.append(display_data)
-
         else:
-            # Rule 3: Website AND NO message -> "No Response" (Waiting)
             users_no_response.append(display_data)
 
-    # 5. Render
     return render_template(
         "dropbox_orders.html",
         total=len(folder_names),
         responded=users_responded,
         no_response=users_no_response,
+        completed=[],
         unparsed=unparsed_folders
     )
-
 
 @dropbox_bp.route("/auto_correction_status")
 def auto_correction_status():
@@ -310,8 +330,11 @@ def auto_correction_status():
     # 1. Define Paths
     target_paths = [
         "/1 daniyal/Auto/send to customer/Correction done",
+        "/1 daniyal/Auto/send to customer/Faraz Corrections",
+        "/1 daniyal/Auto/send to customer/no reply",
         "/1 daniyal/Auto/send to customer"
     ]
+
 
     # 2. Get Folders with Path Context
     folders_data = {} # Use dict to dedup by folder name
