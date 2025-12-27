@@ -31,7 +31,8 @@ from plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
 from apscheduler.schedulers.background import BackgroundScheduler
 from plugins.auto_design_sender import run_scheduled_automation
 from plugins.voice_bot import voice_bp  # <--- IMPORT
-
+import socket
+import atexit
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
 print("[ENV CHECK] R2_BUCKET   =", os.environ.get("R2_BUCKET"))
 print("BOOT TOKEN:", os.getenv("WA_TOKEN"))
@@ -968,36 +969,36 @@ def inbox():
 #if __name__ == "__main__":
 #    app.run(debug=True)
 
-# Initialize Scheduler
-scheduler = BackgroundScheduler()
-# Run every 5 minutes
-scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=5)
-scheduler.start()
 
-# Make sure to shut down scheduler when app exits
-import atexit
+# Global variable to hold the socket lock
+cron_lock_socket = None
 
-# Only start the scheduler if ENABLE_CRON is set to "true" in .env
 if os.environ.get("ENABLE_CRON") == "true":
 
-    # 2. FLASK DEBUG FIX:
-    # Only start scheduler if not in debug mode, OR if we are in the reloader child process.
-    # This prevents the scheduler from starting twice locally.
+    # 1. Check Flask Debug Mode (Local Dev)
+    # We only want to run in the reloader process (WERKZEUG_RUN_MAIN)
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        print(f"🟢 [SCHEDULER] Starting Cron Job on PID {os.getpid()}...")
 
-        scheduler = BackgroundScheduler()
-        # Run every 5 minutes
-        scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=5)
-        scheduler.start()
+        try:
+            # 2. Try to bind a specific local port (49999)
+            # Only ONE process can bind to a port at a time.
+            # If this succeeds, this process becomes the "Scheduler Leader".
+            cron_lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cron_lock_socket.bind(("127.0.0.1", 49999))
 
-        # Shut down scheduler when app exits
-        atexit.register(lambda: scheduler.shutdown())
-    else:
-        print(f"🟡 [SCHEDULER] Skipped on Master Process {os.getpid()} (Waiting for Child)")
-else:
-    pass
-    # print("🟡 [SCHEDULER] Disabled (ENABLE_CRON not set)")
+            print(f"🟢 [SCHEDULER] Lock Acquired on Port 49999. Starting Cron on PID {os.getpid()}...")
+
+            scheduler = BackgroundScheduler()
+            # Run every 5 minutes
+            scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=5)
+            scheduler.start()
+
+            # Shut down scheduler when app exits
+            atexit.register(lambda: scheduler.shutdown())
+
+        except socket.error:
+            # If binding fails, another worker is already running the scheduler.
+            print(f"🟡 [SCHEDULER] Skipped. Another worker already holds the lock on PID {os.getpid()}.")
 
 if __name__ == "__main__":
     # Local development server
