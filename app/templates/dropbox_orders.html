@@ -189,30 +189,75 @@
             {% if no_response %}
             <div class="table-responsive">
                 <table class="table table-hover align-middle">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Order Code</th>
-                            <th>Source</th>
-                            <th>Customer Name</th>
-                            <th>Phone Number</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for item in no_response %}
-                        <tr>
-                            <td><span class="badge bg-secondary">{{ item.order_code if item.order_code else 'N/A' }}</span></td>
-                            <td><span class="badge bg-light text-dark border source-badge">{{ item.source }}</span></td>
-                            <td>{{ item.customer_name }}</td>
-                            <td>{{ item.phone }}</td>
-                            <td>
-                                <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-outline-dark btn-sm btn-chat">
-                                    <i class="bi bi-send"></i> Send Template
-                                </a>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
+                  <thead class="table-light">
+                                <tr>
+                                    <th style="width: 40px;"><input type="checkbox" id="selectAllNoResponse"></th>
+                                    <th>Code</th>
+                                    <th>Customer</th>
+                                    <th>City </th> <!-- NEW -->
+                                    <th>Phone</th>
+                                    <th>Call Status</th>    <!-- NEW -->
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in no_response %}
+                                <tr>
+                                    <td><input type="checkbox" class="bulk-select" value="{{ item.phone }}"></td>
+                                    <td><span class="badge bg-secondary">{{ item.order_code }}</span></td>
+
+                                    <td class="fw-bold">{{ item.customer_name }}</td>
+
+                                    <!-- NEW: City & Address -->
+                                    <td>
+                                        <div class="small fw-bold">{{ item.city }}</div>
+                                        <div class="small text-muted" style="max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ item.address }}">
+
+                                        </div>
+                                    </td>
+
+                                    <td>{{ item.phone }}</td>
+
+                                    <!-- NEW: Call Status -->
+                                    <td>
+                                        {% if item.last_call %}
+                                            {% if 'completed' in item.last_call %}
+                                                <span class="badge bg-success" title="{{ item.last_call_time }}">Called <i class="bi bi-check"></i></span>
+                                            {% elif 'fail' in item.last_call or 'no-answer' in item.last_call %}
+                                                <span class="badge bg-danger" title="{{ item.last_call_time }}">No Answer</span>
+                                            {% else %}
+                                                <span class="badge bg-warning text-dark">{{ item.last_call }}</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="badge bg-light text-muted border">None</span>
+                                        {% endif %}
+                                    </td>
+
+                                    <td>
+                                        <!-- TEMPLATE BUTTON -->
+                                        <td>
+                                                                <!-- TEMPLATE BUTTON -->
+                                            <a href="/inbox?phone={{ item.phone }}" class="btn btn-outline-dark btn-sm mb-1" title="Send WhatsApp">
+                                                <i class="bi bi-chat-text"></i>
+                                            </a>
+
+                                            <!-- REAL CALL BUTTON -->
+                                            <button onclick="makeAiCall('{{ item.phone }}', '{{ item.customer_name }}', '{{ item.order_code }}')"
+                                                    class="btn btn-danger btn-sm mb-1" title="Make AI Call to Customer">
+                                                <i class="bi bi-telephone-outbound"></i>
+                                            </button>
+
+                                            <!-- TEST CALL BUTTON -->
+                                            <button onclick="testAiCall('{{ item.customer_name }}', '{{ item.order_code }}')"
+                                                    class="btn btn-warning btn-sm" title="Test Call to ME">
+                                                <i class="bi bi-tools"></i> Test
+                                            </button>
+                                        </td>
+
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
                 </table>
             </div>
             {% else %}
@@ -419,6 +464,60 @@
             btn.innerHTML = originalHtml;
         }
     }
+
+    async function makeAiCall(phone, name, code) {
+            if (!confirm(`📞 Start AI Call for ${name}?\n\n(Roman Urdu Bot)\nPhone: ${phone}`)) return;
+
+            try {
+                const res = await fetch('/api/make_call', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ phone, name, order_code: code })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    alert("✅ Call Queued! Status will update shortly.");
+                    location.reload();
+                } else {
+                    alert("❌ Call Error: " + data.error);
+                }
+            } catch (e) {
+                alert("Network Error: " + e);
+            }
+        }
+        async function testAiCall(customerName, orderCode) {
+                // 1. Ask for YOUR number
+                const myNumber = prompt("Enter YOUR phone number for the test call (e.g., 923...):");
+
+                if (!myNumber) return; // User cancelled
+
+                if (!confirm(`📞 TEST MODE\n\nCalling: ${myNumber}\nSimulating Customer: ${customerName}\nOrder: ${orderCode}\n\nProceed?`)) return;
+
+                try {
+                    // 2. Call the API but swap 'phone' with YOUR number
+                    const res = await fetch('/api/make_call', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            phone: myNumber,       // <--- Calls YOU
+                            name: customerName,    // <--- Uses Customer Name
+                            order_code: orderCode, // <--- Uses Customer Order
+                            order_count: 1
+                        })
+                    });
+
+                    const data = await res.json();
+                    if (data.success) {
+                        alert("✅ Test Call Initiated! Picking up...");
+                    } else {
+                        alert("❌ Test Failed: " + data.error);
+                    }
+                } catch (e) {
+                    alert("Network Error: " + e);
+                }
+            }
+
 </script>
 
 </body>
