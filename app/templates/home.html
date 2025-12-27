@@ -6,7 +6,7 @@
     <title>ConnectWhatsApp Dashboard</title>
     <!-- Bootstrap 5 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Icons -->
+    <!-- Icons (Required for the images to show) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <style>
         body {
@@ -82,9 +82,10 @@
             font-size: 0.95rem;
         }
 
-        /* Specific Colors */
+        /* --- ICON COLORS --- */
         .icon-whatsapp { color: #25D366; }
         .icon-dropbox { color: #3984fd; }
+        .icon-correction { color: #ff9f43; } /* Orange for Correction */
         .icon-settings { color: #aebac1; }
 
         .footer {
@@ -116,7 +117,7 @@
             <div class="row justify-content-center g-4">
 
                 <!-- CARD 1: WHATSAPP INBOX -->
-                <div class="col-md-5 col-lg-4">
+                <div class="col-md-4 col-lg-4">
                     <a href="/inbox" class="action-card">
                         <i class="bi bi-chat-dots-fill card-icon icon-whatsapp"></i>
                         <div class="card-title">Live Chat Inbox</div>
@@ -126,24 +127,24 @@
                     </a>
                 </div>
 
-                <!-- CARD 2: DROPBOX SYNC -->
-                <div class="col-md-5 col-lg-4">
+                <!-- CARD 2: DROPBOX SYNC (Auto No Reply) -->
+                <div class="col-md-4 col-lg-4">
                     <a href="/auto_no_response" class="action-card">
                         <i class="bi bi-dropbox card-icon icon-dropbox"></i>
-                        <div class="card-title">Order Sync</div>
+                        <div class="card-title">Auto Orders to be sent</div>
                         <div class="card-desc">
                             Compare Auto Folders with message history to find missing replies.
                         </div>
                     </a>
                 </div>
 
-                <!-- CARD 3: SETTINGS / CONNECT (Optional) -->
-                <div class="col-md-5 col-lg-4">
-                    <a href="/dropbox/connect" class="action-card">
-                        <i class="bi bi-gear-fill card-icon icon-settings"></i>
-                        <div class="card-title">Re-Connect</div>
+                <!-- CARD 3: CORRECTION WINDOW (New) -->
+                <div class="col-md-4 col-lg-4">
+                    <a href="/auto_correction_status" class="action-card">
+                        <i class="bi bi-stopwatch card-icon icon-correction"></i>
+                        <div class="card-title">Correction 24h</div>
                         <div class="card-desc">
-                            Update Dropbox or WhatsApp API connections and permissions.
+                            Monitor correction timers and prioritize orders expiring soon.
                         </div>
                     </a>
                 </div>
