@@ -221,10 +221,23 @@ def auto_no_response():
     parsed_folders = []
     unparsed_folders = []
     all_candidate_phones = set()
+    all_codes = set()
 
     for name in folder_names:
         data = parse_folder_data(name)
         data["full_path"] = f"{base_path}/{name}"
+
+        # EXTRACT CITY FROM FOLDER NAME (Last part after --)
+        parts = name.split("--")
+        if len(parts) > 1:
+            # Remove digits if accidental, strip spaces
+            raw_city = parts[-1].strip()
+            data['folder_city'] = raw_city
+        else:
+            data['folder_city'] = "Unknown"
+
+        if data["order_code"]:
+            all_codes.add(data["order_code"])
 
         if data["phones"]:
             parsed_folders.append(data)
@@ -236,44 +249,62 @@ def auto_no_response():
     # 2. Check Database
     responded_short_numbers = set()
     sent_folders_set = set()
+    call_log_map = {}
 
     conn = get_conn()
-    cur = conn.cursor() # Standard cursor (tuples) or DictCursor based on config
+    cur = conn.cursor()
 
+    # A. Check Messages
     if all_candidate_phones:
         check_list = list(all_candidate_phones)
         format_strings = ','.join(['%s'] * len(check_list))
+        query = f"SELECT DISTINCT RIGHT(user_phone, 10) as short_phone FROM messages WHERE sender = 'customer' AND RIGHT(user_phone, 10) IN ({format_strings})"
+        try:
+            cur.execute(query, tuple(check_list))
+            rows = cur.fetchall()
+            for row in rows:
+                val = row['short_phone'] if isinstance(row, dict) else row[0]
+                if val: responded_short_numbers.add(val)
+        except Exception as e:
+            print(f"Msg Check Error: {e}")
+            conn.rollback()
 
-        # Explicitly selecting column alias
-        query = f"""
-            SELECT DISTINCT RIGHT(user_phone, 10) as short_phone
-            FROM messages
-            WHERE sender = 'customer'
-            AND RIGHT(user_phone, 10) IN ({format_strings})
-        """
-        cur.execute(query, tuple(check_list))
-        rows = cur.fetchall()
-
-        # --- CRITICAL FIX START ---
-        for row in rows:
-            # Check the type of row to handle RealDictCursor vs TupleCursor safely
-            if isinstance(row, dict):
-                val = row['short_phone']
-            else:
-                val = row[0]
-
-            if val: responded_short_numbers.add(val)
-        # --- CRITICAL FIX END ---
-
-    # Fetch Sent Log
+    # B. Fetch Sent Log
     try:
         cur.execute("SELECT folder_name FROM design_sent_log")
         rows = cur.fetchall()
         for row in rows:
-            if isinstance(row, dict): val = row['folder_name']
-            else: val = row[0]
+            val = row['folder_name'] if isinstance(row, dict) else row[0]
             sent_folders_set.add(val)
-    except: pass
+    except:
+        conn.rollback()
+
+    # C. Fetch Call Logs (REMOVED ORDERS TABLE QUERY)
+    if all_codes:
+        codes_list = list(all_codes)
+        fmt = ','.join(['%s'] * len(codes_list))
+        try:
+            cur.execute(f"""
+                SELECT order_code, status, outcome, created_at
+                FROM call_logs
+                WHERE order_code IN ({fmt})
+                ORDER BY created_at ASC
+            """, tuple(codes_list))
+
+            for row in cur.fetchall():
+                c_code = row['order_code'] if isinstance(row, dict) else row[0]
+                c_stat = row['status'] if isinstance(row, dict) else row[1]
+                c_out = row['outcome'] if isinstance(row, dict) else row[2]
+                c_time = row['created_at'] if isinstance(row, dict) else row[3]
+
+                call_log_map[c_code] = {
+                    'status': c_stat,
+                    'outcome': c_out,
+                    'time': c_time.strftime("%d %b %H:%M") if c_time else ""
+                }
+        except Exception as e:
+            print(f"Call Log Error: {e}")
+            conn.rollback()
 
     cur.close(); conn.close()
 
@@ -291,14 +322,31 @@ def auto_no_response():
                 phone_match_in_db = True
                 break
 
+        # Data enrichment
+        code = item["order_code"]
+        call_info = call_log_map.get(code, {})
+
+        # Call Status String
+        last_call_txt = None
+        if call_info:
+            stat = call_info.get('status', '')
+            out = call_info.get('outcome', '')
+            if out: stat += f" ({out})"
+            last_call_txt = stat
+
         display_data = {
             "phone": active_phone,
-            "order_code": item["order_code"],
+            "order_code": code,
             "source": item["source"],
             "customer_name": item["customer_name"],
             "folder_name": item["folder_name"],
             "full_path": item["full_path"],
-            "is_sent": item["folder_name"] in sent_folders_set
+            "is_sent": item["folder_name"] in sent_folders_set,
+            # FIXED: Only use folder name city
+            "city": item.get('folder_city', 'Unknown'),
+            "address": "N/A", # Removed DB lookup
+            "last_call": last_call_txt,
+            "last_call_time": call_info.get('time', '')
         }
 
         source_lower = item["source"].lower()
@@ -319,7 +367,7 @@ def auto_no_response():
         completed=[],
         unparsed=unparsed_folders
     )
-
+        
 @dropbox_bp.route("/auto_correction_status")
 def auto_correction_status():
     if "user_id" not in session: return redirect("/login")
