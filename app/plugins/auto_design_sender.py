@@ -7,7 +7,7 @@ import dropbox
 import mimetypes
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, session, request
-from db import get_conn
+from app.db import get_conn
 from psycopg2.extras import RealDictCursor
 import psycopg2  # <--- REQUIRED FOR INTEGRITY ERROR CHECK
 
