@@ -3148,7 +3148,8 @@ def external_send_order():
         # =====================================================
         incoming_key = request.headers.get("X-API-Key")
         expected_key = os.getenv("API_SECRET", "default_secret")
-
+        print("🔑 Incoming Key:", incoming_key)
+        print("🔑 Expected Key:", expected_key)
         if incoming_key != expected_key:
             return jsonify({"error": "Unauthorized"}), 401
 
@@ -3164,7 +3165,7 @@ def external_send_order():
         amount = str(data.get("amount", "")).strip()
 
         template_name = data.get("template_name", "order_received")
-        language = data.get("language", "en")
+        language = data.get("language", "en_US")
 
         phone = normalize_phone(raw_phone)
         if not phone:
