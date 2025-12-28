@@ -20,7 +20,7 @@ from flask import Response
 import traceback
 import subprocess
 TARGET_WABA_ID = "1628402398537645"
-from r2_client import get_r2_client
+from app.r2_client import get_r2_client
 import time
 import re
 import dropbox
