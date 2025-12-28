@@ -3208,7 +3208,7 @@ def external_send_order():
         "type": "template",
         "template": {
             "name": template_name,          # order_management_3
-            "language": {"code": "en"},
+            "language": {"code": "en_US"},
             "components": [
                 {
                     "type": "body",
