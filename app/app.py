@@ -25,12 +25,12 @@ import time
 import re
 import dropbox
 import urllib.parse
-from plugins.dropbox_plugin import dropbox_bp
+from app.plugins.dropbox_plugin import dropbox_bp
 from flask import Blueprint, request, redirect, session, jsonify, render_template
-from plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
+from app.plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
 from apscheduler.schedulers.background import BackgroundScheduler
-from plugins.auto_design_sender import run_scheduled_automation
-from plugins.voice_bot import voice_bp  # <--- IMPORT
+from app.plugins.auto_design_sender import run_scheduled_automation
+from app.plugins.voice_bot import voice_bp  # <--- IMPORT
 import socket
 import atexit
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
