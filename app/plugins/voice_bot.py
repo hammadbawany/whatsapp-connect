@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
-from db import get_conn
+from app.db import get_conn
 
 # =====================================================
 # CONFIG

@@ -4,7 +4,7 @@ import dropbox
 import urllib.parse
 import re
 from flask import Blueprint, request, redirect, session, jsonify, render_template
-from db import get_conn
+from app.db import get_conn
 from datetime import datetime, timedelta
 dropbox_bp = Blueprint("dropbox", __name__)
 import tempfile
