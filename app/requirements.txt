@@ -1,0 +1,12 @@
+Flask==2.2.5
+gunicorn==20.1.0
+requests
+psycopg2-binary
+python-dotenv
+boto3==1.42.12
+urllib3==1.26.18
+dropbox
+apscheduler
+twilio
+openai
+google-generativeai
