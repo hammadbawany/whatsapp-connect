@@ -10,4 +10,3 @@ apscheduler
 twilio
 openai
 google-generativeai
-pip install -U google-generativeai
