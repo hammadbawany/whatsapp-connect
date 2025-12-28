@@ -14,7 +14,7 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-from db import get_conn  # assumes db.get_conn exists and DATABASE_URL set
+from app.db import get_conn
 import tempfile
 from flask import Response
 import traceback
