@@ -3202,33 +3202,42 @@ def external_send_order():
         }
 
         payload = {
-            "messaging_product": "whatsapp",
-            "to": phone,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": language},
-                "components": [
-                    {
-                        "type": "body",
-                        "parameters": [
-                            {"type": "text", "text": name},           # {{1}}
-                            {"type": "text", "text": order_number},   # {{2}}
-                            {"type": "text", "text": delivery_date},  # {{3}}
-                            {"type": "text", "text": amount}          # {{4}}
-                        ]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": "0",
-                        "parameters": [
-                            {"type": "text", "text": order_number}
-                        ]
-                    }
-                ]
-            }
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": template_name,          # order_management_3
+            "language": {"code": "en"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": name},           # {{1}}
+                        {"type": "text", "text": order_number},   # {{2}}
+                        {"type": "text", "text": delivery_date},  # {{3}}
+                        {"type": "text", "text": amount}          # {{4}}
+                    ]
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "0",
+                    "parameters": [
+                        {"type": "payload", "payload": "CONFIRM_ORDER"}
+                    ]
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "1",
+                    "parameters": [
+                        {"type": "payload", "payload": "CANCEL_ORDER"}
+                    ]
+                }
+            ]
         }
+    }
+
 
         print("\n🚀 SENDING TO META:")
         print(json.dumps(payload, indent=2))
@@ -3237,7 +3246,19 @@ def external_send_order():
         # 5️⃣ SEND TO META
         # =====================================================
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
-        resp_json = resp.json()
+
+        print("📡 META STATUS:", resp.status_code)
+        print("📡 META RAW:", resp.text)
+
+        try:
+            resp_json = resp.json()
+        except Exception:
+            return jsonify({
+                "success": False,
+                "error": "Meta returned non-JSON",
+                "raw": resp.text
+            }), 500
+
 
         if resp.status_code not in [200, 201]:
             print("❌ META ERROR:", resp_json)
