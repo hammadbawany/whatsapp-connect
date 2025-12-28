@@ -8,3 +8,6 @@ urllib3==1.26.18
 dropbox
 apscheduler
 twilio
+openai
+google-generativeai
+pip install -U google-generativeai

@@ -3142,65 +3142,65 @@ def detect_voice_or_audio(duration_seconds):
 # ==========================================
 @app.route("/api/external/send_order", methods=["POST"])
 def external_send_order():
-    '''
     try:
-        # 1️⃣ SECURITY: Check API Key (Header OR URL)
-        # Add API_SECRET="mysecret123" to your .env file
-        incoming_key = request.headers.get("X-API-Key") or request.args.get("X-API-Key")
+        # =====================================================
+        # 1️⃣ SECURITY CHECK
+        # =====================================================
+        incoming_key = request.headers.get("X-API-Key")
         expected_key = os.getenv("API_SECRET", "default_secret")
-
-        # Debugging Security
-        print(f"🔑 Incoming Key: {incoming_key} | Expected: {expected_key}")
 
         if incoming_key != expected_key:
             return jsonify({"error": "Unauthorized"}), 401
 
-        # 2️⃣ Get Data from Website/Postman
-        data = request.json
+        # =====================================================
+        # 2️⃣ INPUT DATA
+        # =====================================================
+        data = request.get_json(silent=True) or {}
 
-        # ⚠️ CRITICAL: We extract simple variables here.
-        # Do not pass the full Meta structure from Postman.
         raw_phone = data.get("phone")
+        name = str(data.get("name", "")).strip()
+        order_number = str(data.get("order_number", "")).strip()
+        delivery_date = str(data.get("delivery_date", "")).strip()
+        amount = str(data.get("amount", "")).strip()
 
-        # Variables for the template {{1}}, {{2}}, {{3}}
-        order_code = str(data.get("order_code", "N/A"))
-        amount = str(data.get("amount", "0"))
-        delivery_time = str(data.get("delivery_time", "N/A"))
-
-        # Template Settings
-        # Defaulting language to "en" because your screenshot showed "English" (not US)
-        template_name = data.get("template_name") or "orderconfirmation"
-        language = data.get("language") or "en"
+        template_name = data.get("template_name", "order_received")
+        language = data.get("language", "en")
 
         phone = normalize_phone(raw_phone)
         if not phone:
             return jsonify({"error": "Invalid phone number"}), 400
 
-        # 3️⃣ Get WhatsApp Credentials
+        if not all([name, order_number, delivery_date, amount]):
+            return jsonify({"error": "Missing template variables"}), 400
+
+        # =====================================================
+        # 3️⃣ LOAD WHATSAPP ACCOUNT
+        # =====================================================
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        cur.execute(
-            "SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
-            (TARGET_WABA_ID,)
-        )
+        cur.execute("""
+            SELECT id, phone_number_id, access_token
+            FROM whatsapp_accounts
+            WHERE waba_id = %s
+            LIMIT 1
+        """, (TARGET_WABA_ID,))
         acc = cur.fetchone()
 
         if not acc:
-            cur.close(); conn.close()
-            return jsonify({"error": "WhatsApp account not connected to DB"}), 500
+            cur.close()
+            conn.close()
+            return jsonify({"error": "WhatsApp account not connected"}), 500
 
-        # 4️⃣ Construct Payload (Python builds the complex structure here)
+        # =====================================================
+        # 4️⃣ META PAYLOAD (POSITIONAL PARAMETERS)
+        # =====================================================
         url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         headers = {
             "Authorization": f"Bearer {acc['access_token']}",
             "Content-Type": "application/json"
         }
 
-# ... inside external_send_order ...
-
-        # 4️⃣ Construct Payload (WITH NAMED PARAMETERS)
-        # 🟢 FIX: We added "parameter_name" to match your template screenshot
         payload = {
             "messaging_product": "whatsapp",
             "to": phone,
@@ -3212,78 +3212,59 @@ def external_send_order():
                     {
                         "type": "body",
                         "parameters": [
-                            # Variable 1: {{ordercode}}
-                            {
-                                "type": "text",
-                                "parameter_name": "ordercode",
-                                "text": order_code
-                            },
-
-                            # Variable 2: {{amount}}
-                            {
-                                "type": "text",
-                                "parameter_name": "amount",
-                                "text": amount
-                            },
-
-                            # Variable 3: {{deliverytime}}
-                            {
-                                "type": "text",
-                                "parameter_name": "deliverytime",
-                                "text": delivery_time
-                            }
-                        ]
-                    },
-                    # 🟢 OPTIONAL: Button Payloads (Best Practice for Quick Replies)
-                    # This tells your webhook which button was clicked (YES or CANCEL)
-                    {
-                        "type": "button",
-                        "sub_type": "quick_reply",
-                        "index": "0", # First Button (Yes)
-                        "parameters": [
-                            {"type": "payload", "payload": "YES_SHARE_DESIGN"}
+                            {"type": "text", "text": name},           # {{1}}
+                            {"type": "text", "text": order_number},   # {{2}}
+                            {"type": "text", "text": delivery_date},  # {{3}}
+                            {"type": "text", "text": amount}          # {{4}}
                         ]
                     },
                     {
                         "type": "button",
-                        "sub_type": "quick_reply",
-                        "index": "1", # Second Button (Cancel)
+                        "sub_type": "url",
+                        "index": "0",
                         "parameters": [
-                            {"type": "payload", "payload": "CANCEL_ORDER"}
+                            {"type": "text", "text": order_number}
                         ]
                     }
                 ]
             }
         }
-        # 🐛 DEBUG: Print what we are sending to Meta
-        print("\n" + "="*30)
-        print("🚀 SENDING TO META:")
-        print(json.dumps(payload, indent=2))
-        print("="*30 + "\n")
 
-        # 5️⃣ Send to Meta
-        resp = requests.post(url, headers=headers, json=payload)
+        print("\n🚀 SENDING TO META:")
+        print(json.dumps(payload, indent=2))
+
+        # =====================================================
+        # 5️⃣ SEND TO META
+        # =====================================================
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
         resp_json = resp.json()
 
-        # 6️⃣ Save to Database
-        wa_id = None
-        if resp_json.get("messages"):
-            wa_id = resp_json["messages"][0]["id"]
+        if resp.status_code not in [200, 201]:
+            print("❌ META ERROR:", resp_json)
+            return jsonify({"success": False, "meta_error": resp_json}), 400
 
-# 🟢 CHANGED: Reconstruct the FULL message text to match your template
-        # We use Python f-strings to inject the variables into the text exactly like WhatsApp does.
+        wa_id = resp_json["messages"][0]["id"]
+
+        # =====================================================
+        # 6️⃣ SAVE MESSAGE TO DB (MATCH TEMPLATE)
+        # =====================================================
         full_message_body = (
-            "Thank You for placing order\n"
-            f"Your order code is {order_code}\n"
-            f"Your Payable amount is {amount}\n\n"
-            "Your order is now Confirmed\n"
-            f"Delivery time is {delivery_time}\n"
-            "We will show you sample before printing"
+            f"Hi {name}, we've received your order.\n\n"
+            f"Your order number is {order_number}.\n\n"
+            f"Estimated delivery: {delivery_date}.\n\n"
+            f"Payable Amount: rs {amount}.\n\n"
+            "Click below to manage your order."
         )
 
         cur.execute("""
             INSERT INTO messages (
-                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, timestamp
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                message,
+                whatsapp_id,
+                status,
+                timestamp
             )
             VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
         """, (acc["id"], phone, full_message_body, wa_id))
@@ -3292,16 +3273,12 @@ def external_send_order():
         cur.close()
         conn.close()
 
-        if resp.status_code in [200, 201]:
-            return jsonify({"success": True, "wa_id": wa_id})
-        else:
-            return jsonify({"success": False, "meta_error": resp_json}), 400
+        return jsonify({"success": True, "wa_id": wa_id})
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-'''
-    return jsonify({"success": False, "meta_error": resp_json}), 400
+
 
 ###########
 ###templater syncing

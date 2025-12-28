@@ -10,7 +10,8 @@ dropbox_bp = Blueprint("dropbox", __name__)
 import tempfile
 import mimetypes
 from werkzeug.utils import secure_filename
-
+import psycopg2
+from psycopg2.extras import DictCursor
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
 APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
@@ -19,6 +20,138 @@ REDIRECT_URI = os.getenv("DROPBOX_REDIRECT_URI")
 assert APP_KEY, "DROPBOX_APP_KEY missing"
 assert APP_SECRET, "DROPBOX_APP_SECRET missing"
 assert REDIRECT_URI, "DROPBOX_REDIRECT_URI missing"
+
+
+EXTERNAL_DB_URL = "postgresql://u8crgmufmb2vp9:p9eb3995b1650b4c908cb98ca407a7300106031951989ff30824c937b828fdeb9@ec2-3-214-33-144.compute-1.amazonaws.com/d388972uunvvuc"
+
+def get_remote_order_details(missing_codes):
+    print(f"\n[REMOTE DB] 🔌 Connecting to fetch {len(missing_codes)} codes...")
+    print(f"[REMOTE DB] Codes to find: {missing_codes}")
+
+    fetched_data = {}
+    remote_conn = None
+
+    try:
+        remote_conn = psycopg2.connect(EXTERNAL_DB_URL)
+        cur = remote_conn.cursor(cursor_factory=DictCursor)
+
+        format_strings = ','.join(['%s'] * len(missing_codes))
+
+        # NOTE: Ensure table name is 'orders' and column is 'order_id'
+        query = f"""
+            SELECT order_id, customer_phone, customer_address, customer_city
+            FROM orders
+            WHERE CAST(order_id AS TEXT) IN ({format_strings})
+        """
+
+        cur.execute(query, tuple(missing_codes))
+        rows = cur.fetchall()
+
+        print(f"[REMOTE DB] ✅ Success! Found {len(rows)} records.")
+
+        for row in rows:
+            # Handle both dict and tuple returns just in case
+            if isinstance(row, dict):
+                code = str(row['order_id'])
+                data = {
+                    'phone': row['customer_phone'],
+                    'address': row['customer_address'],
+                    'city': row['customer_city']
+                }
+            else:
+                code = str(row[0])
+                data = {'phone': row[1], 'address': row[2], 'city': row[3]}
+
+            fetched_data[code] = data
+            print(f"   -> Found Code {code}: {data['city']}")
+
+        cur.close()
+
+    except Exception as e:
+        print(f"[REMOTE DB] ❌ CONNECTION ERROR: {e}")
+    finally:
+        if remote_conn:
+            remote_conn.close()
+
+    return fetched_data
+
+def sync_order_details(order_codes):
+    """
+    1. Checks LOCAL cache.
+    2. Fetches MISSING from REMOTE DB.
+    3. Updates LOCAL cache.
+    4. Returns dictionary {code: {'address':..., 'city':..., 'phone':...}}
+    """
+    # Filter out None/Empty codes
+    valid_codes = [str(c) for c in order_codes if c]
+    if not valid_codes: return {}
+
+    conn = get_conn() # Your local DB connection
+    cur = conn.cursor()
+
+    # 1. Check Local Cache
+    format_strings = ','.join(['%s'] * len(valid_codes))
+    query = f"""
+        SELECT order_code, customer_phone, customer_address, customer_city
+        FROM cached_order_info
+        WHERE order_code IN ({format_strings})
+    """
+    cur.execute(query, tuple(valid_codes))
+
+    local_results = {}
+    found_codes = set()
+
+    for row in cur.fetchall():
+        # Handle tuple or dict return depending on your get_conn configuration
+        if isinstance(row, dict):
+            code = row['order_code']
+            data = {'phone': row['customer_phone'], 'address': row['customer_address'], 'city': row['customer_city']}
+        else:
+            code = row[0]
+            data = {'phone': row[1], 'address': row[2], 'city': row[3]}
+
+        local_results[code] = data
+        found_codes.add(code)
+
+    # 2. Identify Missing
+    missing_codes = [c for c in valid_codes if c not in found_codes]
+
+    # 3. Fetch Remote (Only if needed)
+    if missing_codes:
+        print(f"Fetching {len(missing_codes)} orders from Remote External DB...")
+        new_data = get_remote_order_details(missing_codes)
+
+        if new_data:
+            insert_values = []
+            for code, info in new_data.items():
+                # Add to results for immediate return
+                local_results[code] = info
+                # Prepare for DB Insert
+                insert_values.append((code, info.get('phone'), info.get('address'), info.get('city')))
+
+            # 4. Save to Local Cache (Upsert)
+            if insert_values:
+                upsert_query = """
+                    INSERT INTO cached_order_info (order_code, customer_phone, customer_address, customer_city)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (order_code) DO UPDATE SET
+                        customer_phone = EXCLUDED.customer_phone,
+                        customer_address = EXCLUDED.customer_address,
+                        customer_city = EXCLUDED.customer_city,
+                        updated_at = NOW()
+                """
+                try:
+                    cur.executemany(upsert_query, insert_values)
+                    conn.commit()
+                except Exception as e:
+                    print(f"Cache Insert Error: {e}")
+                    conn.rollback()
+
+    cur.close()
+    conn.close()
+
+    return local_results
+
 
 # ==========================================
 # 1. AUTHENTICATION
@@ -215,7 +348,7 @@ def auto_no_response():
     dbx = get_user_dropbox_client(user_id)
     base_path = "/1 daniyal/Auto"
 
-    # 1. Get Folders
+    # 1. Get Folders from Dropbox
     folder_names = get_all_dropbox_folders(dbx, base_path)
 
     parsed_folders = []
@@ -223,16 +356,15 @@ def auto_no_response():
     all_candidate_phones = set()
     all_codes = set()
 
+    # --- PARSING LOOP ---
     for name in folder_names:
         data = parse_folder_data(name)
         data["full_path"] = f"{base_path}/{name}"
 
-        # EXTRACT CITY FROM FOLDER NAME (Last part after --)
+        # Backup: Extract city from folder name (if DB lookup fails later)
         parts = name.split("--")
         if len(parts) > 1:
-            # Remove digits if accidental, strip spaces
-            raw_city = parts[-1].strip()
-            data['folder_city'] = raw_city
+            data['folder_city'] = parts[-1].strip()
         else:
             data['folder_city'] = "Unknown"
 
@@ -246,7 +378,12 @@ def auto_no_response():
             data["name"] = name
             unparsed_folders.append(data)
 
-    # 2. Check Database
+    # --- NEW: SYNC ADDRESS/CITY/PHONE FROM DB ---
+    # This calls the helper function defined above
+    all_codes_list = list(all_codes)
+    cached_db_info = sync_order_details(all_codes_list)
+
+    # 2. Check Local Database (Messages & Sent Log)
     responded_short_numbers = set()
     sent_folders_set = set()
     call_log_map = {}
@@ -254,7 +391,7 @@ def auto_no_response():
     conn = get_conn()
     cur = conn.cursor()
 
-    # A. Check Messages
+    # A. Check Messages (WhatsApp Replies)
     if all_candidate_phones:
         check_list = list(all_candidate_phones)
         format_strings = ','.join(['%s'] * len(check_list))
@@ -279,7 +416,7 @@ def auto_no_response():
     except:
         conn.rollback()
 
-    # C. Fetch Call Logs (REMOVED ORDERS TABLE QUERY)
+    # C. Fetch Call Logs
     if all_codes:
         codes_list = list(all_codes)
         fmt = ','.join(['%s'] * len(codes_list))
@@ -308,7 +445,7 @@ def auto_no_response():
 
     cur.close(); conn.close()
 
-    # 3. CATEGORIZE
+    # 3. CATEGORIZE & MERGE DATA
     users_responded = []
     users_no_response = []
 
@@ -326,6 +463,21 @@ def auto_no_response():
         code = item["order_code"]
         call_info = call_log_map.get(code, {})
 
+        # --- MERGE DB INFO ---
+        db_details = cached_db_info.get(code, {})
+
+        # 1. Address: DB > 'N/A'
+        final_address = db_details.get('address') or "N/A"
+
+        # 2. City: DB > Folder Name > 'Unknown'
+        final_city = db_details.get('city')
+        if not final_city or final_city.lower() == 'none':
+            final_city = item.get('folder_city', 'Unknown')
+
+        # 3. Phone Fallback: If folder has no phone (unlikely here as we looped parsed_folders), use DB
+        # This is mostly for your reference, displayed in the table
+        db_phone = db_details.get('phone')
+
         # Call Status String
         last_call_txt = None
         if call_info:
@@ -336,17 +488,18 @@ def auto_no_response():
 
         display_data = {
             "phone": active_phone,
+            "db_phone": db_phone, # Passed to template if you want to show alternate phone
             "order_code": code,
             "source": item["source"],
             "customer_name": item["customer_name"],
             "folder_name": item["folder_name"],
             "full_path": item["full_path"],
             "is_sent": item["folder_name"] in sent_folders_set,
-            # FIXED: Only use folder name city
-            "city": item.get('folder_city', 'Unknown'),
-            "address": "N/A", # Removed DB lookup
+            "city": final_city,
+            "address": final_address,
             "last_call": last_call_txt,
-            "last_call_time": call_info.get('time', '')
+            "last_call_time": call_info.get('time', ''),
+            "call_outcome": call_info.get('outcome', '') # Added for badge logic in HTML
         }
 
         source_lower = item["source"].lower()
@@ -359,6 +512,28 @@ def auto_no_response():
         else:
             users_no_response.append(display_data)
 
+    # 👇 ADD THIS SORTING LOGIC 👇
+    def sort_key(x):
+        # Safely convert order_code to int for correct numerical sorting
+        # If code is missing or invalid, treat it as 0
+        code = x.get('order_code')
+        return int(code) if code and str(code).isdigit() else 0
+
+    users_responded.sort(key=sort_key, reverse=True)
+    users_no_response.sort(key=sort_key, reverse=True)
+    # 👆 ---------------------- 👆
+
+    # 👇 ADD THIS SORTING LOGIC 👇
+    def sort_key(x):
+        # Safely convert order_code to int for correct numerical sorting
+        # If code is missing or invalid, treat it as 0
+        code = x.get('order_code')
+        return int(code) if code and str(code).isdigit() else 0
+
+    users_responded.sort(key=sort_key, reverse=True)
+    users_no_response.sort(key=sort_key, reverse=True)
+    # 👆 ---------------------- 👆
+
     return render_template(
         "dropbox_orders.html",
         total=len(folder_names),
@@ -367,7 +542,8 @@ def auto_no_response():
         completed=[],
         unparsed=unparsed_folders
     )
-        
+
+
 @dropbox_bp.route("/auto_correction_status")
 def auto_correction_status():
     if "user_id" not in session: return redirect("/login")

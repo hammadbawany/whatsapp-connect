@@ -197,6 +197,8 @@
                                     <th>City </th> <!-- NEW -->
                                     <th>Phone</th>
                                     <th>Call Status</th>    <!-- NEW -->
+                                    <th>Call Status2</th>    <!-- NEW -->
+
                                     <th>Action</th>
                                 </tr>
                             </thead>
@@ -204,14 +206,30 @@
                                 {% for item in no_response %}
                                 <tr>
                                     <td><input type="checkbox" class="bulk-select" value="{{ item.phone }}"></td>
-                                    <td><span class="badge bg-secondary">{{ item.order_code }}</span></td>
+                                    <td>
+                                        {% if item.order_code %}
+                                            <a href="https://lifafay.herokuapp.com/orders/{{ item.order_code }}" target="_blank" class="text-decoration-none" title="View Order Details">
+                                                <span class="badge bg-dark">{{ item.order_code }}</span>
+                                            </a>
+                                        {% else %}
+                                            <span class="badge bg-secondary">N/A</span>
+                                        {% endif %}
+                                    </td>
 
                                     <td class="fw-bold">{{ item.customer_name }}</td>
 
                                     <!-- NEW: City & Address -->
                                     <td>
                                         <div class="small fw-bold">{{ item.city }}</div>
-                                        <div class="small text-muted" style="max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ item.address }}">
+                                        <!-- NEW: City & Address -->
+
+                                        <!-- Ensure title has the full address for hover -->
+                                        <div class="small text-muted"
+                                             style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                             title="{{ item.address }}">
+                                             {{ item.address }}
+                                        </div>
+
 
                                         </div>
                                     </td>
@@ -220,20 +238,51 @@
 
                                     <!-- NEW: Call Status -->
                                     <td>
-                                        {% if item.last_call %}
-                                            {% if 'completed' in item.last_call %}
-                                                <span class="badge bg-success" title="{{ item.last_call_time }}">Called <i class="bi bi-check"></i></span>
-                                            {% elif 'fail' in item.last_call or 'no-answer' in item.last_call %}
-                                                <span class="badge bg-danger" title="{{ item.last_call_time }}">No Answer</span>
-                                            {% else %}
-                                                <span class="badge bg-warning text-dark">{{ item.last_call }}</span>
-                                            {% endif %}
+                                        {% if item.call_outcome == 'CONFIRMED' %}
+                                            <span class="badge bg-success" title="Confirmed via AI Call">
+                                                Confirmed by Call
+                                            </span>
+
+                                        {% elif item.call_outcome == 'CANCELLED' %}
+                                            <span class="badge bg-danger" title="Cancelled via AI Call">
+                                                Cancelled by Call
+                                            </span>
+
+                                        {% elif item.last_call %}
+                                            <span class="badge bg-warning text-dark" title="{{ item.last_call_time }}">
+                                                {{ item.last_call }}
+                                            </span>
+
                                         {% else %}
-                                            <span class="badge bg-light text-muted border">None</span>
+                                            <span class="badge bg-light text-muted border">
+                                                None
+                                            </span>
                                         {% endif %}
                                     </td>
 
                                     <td>
+    {% if item.call_outcome == 'CONFIRMED' %}
+        <span class="badge bg-success">
+            Confirmed
+        </span>
+
+    {% elif item.call_outcome == 'CANCELLED' %}
+        <span class="badge bg-danger">
+            Cancelled
+        </span>
+
+    {% elif item.last_call %}
+        <span class="badge bg-warning text-dark">
+            Unknown
+        </span>
+
+    {% else %}
+        <span class="badge bg-light text-muted border">
+            Not Called
+        </span>
+    {% endif %}
+</td>
+
                                         <!-- TEMPLATE BUTTON -->
                                         <td>
                                                                 <!-- TEMPLATE BUTTON -->
@@ -252,9 +301,15 @@
                                                     class="btn btn-warning btn-sm" title="Test Call to ME">
                                                 <i class="bi bi-tools"></i> Test
                                             </button>
+                                            <button
+                                                onclick="viewTranscript('{{ item.order_code }}')"
+                                                class="btn btn-outline-secondary btn-sm mt-1"
+                                                title="View Call Transcript">
+                                                Transcript
+                                            </button>
                                         </td>
 
-                                    </td>
+
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -346,6 +401,19 @@
             </div>
         </div>
     </div>
+</div>
+<div class="modal fade" id="transcriptModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Call Transcript</h5>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="transcriptBody">
+        Loading transcript…
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Bootstrap JS -->
@@ -488,7 +556,13 @@
         }
         async function testAiCall(customerName, orderCode) {
                 // 1. Ask for YOUR number
-                const myNumber = prompt("Enter YOUR phone number for the test call (e.g., 923...):");
+                const DEFAULT_TEST_NUMBER = "+923468202114";
+
+                // Ask, but pre-filled
+                const myNumber = prompt(
+                    "Enter YOUR phone number for the test call:",
+                    DEFAULT_TEST_NUMBER
+                );
 
                 if (!myNumber) return; // User cancelled
 
@@ -518,6 +592,37 @@
                 }
             }
 
+</script>
+<script>
+async function viewTranscript(orderCode) {
+    try {
+        const res = await fetch(`/api/call_transcript?order_code=${orderCode}`);
+        const data = await res.json();
+
+        let html = "";
+        if (!data.length) {
+            html = "<p class='text-muted'>No transcript available.</p>";
+        } else {
+            data.forEach(row => {
+                html += `
+                    <div class="mb-2">
+                        <strong>${row.speaker}</strong>
+                        <small class="text-muted">(${row.created_at})</small><br>
+                        ${row.message}
+                    </div>
+                `;
+            });
+        }
+
+        document.getElementById("transcriptBody").innerHTML = html;
+        new bootstrap.Modal(
+            document.getElementById("transcriptModal")
+        ).show();
+
+    } catch (e) {
+        alert("Failed to load transcript");
+    }
+}
 </script>
 
 </body>

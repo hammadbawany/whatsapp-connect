@@ -1,233 +1,299 @@
 import os
-import sys
-import urllib.parse  # <--- Added this
-from flask import Blueprint, request, url_for, jsonify
+import re
+import urllib.parse
+from datetime import datetime
+from flask import Blueprint, request, jsonify
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
 from db import get_conn
 
-voice_bp = Blueprint("voice", __name__)
-
+# =====================================================
+# CONFIG
+# =====================================================
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_FROM = os.getenv("TWILIO_PHONE_NUMBER")
 DOMAIN_URL = os.getenv("DOMAIN_URL")
 
-# Verify Env Vars on Load
-print(f"--- VOICE BOT LOADED ---")
-print(f"TWILIO_SID: {TWILIO_SID}")
-print(f"TWILIO_FROM: {TWILIO_FROM}")
-print(f"DOMAIN_URL: {DOMAIN_URL}")
+client = Client(TWILIO_SID, TWILIO_TOKEN)
+voice_bp = Blueprint("voice", __name__)
 
-try:
-    client = Client(TWILIO_SID, TWILIO_TOKEN)
-except Exception as e:
-    print(f"❌ Twilio Client Init Error: {e}")
+BOT_VOICE = "Google.en-IN-Neural2-B"
 
-# --- 1. START CALL API ---
-@voice_bp.route("/api/make_call", methods=['POST'])
-def make_call():
-    data = request.get_json()
-    phone = data.get('phone')
-    name = data.get('name', 'Customer')
-    code = data.get('order_code')
+# =====================================================
+# UTILS
+# =====================================================
+def ts():
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-    print(f"\n📞 [CALL REQUEST] Starting...")
-    print(f"   - Phone: {phone}")
-    print(f"   - Name: {name}")
+def normalize_text(text):
+    if not text:
+        return ""
+    t = text.lower()
+    t = re.sub(r"[!?.।]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
-    if not phone:
-        print("❌ Error: No phone provided")
-        return jsonify({"error": "No phone"}), 400
-
-    # Clean phone
-    clean_phone = phone.replace(" ", "").replace("-", "")
-    if clean_phone.startswith("03"): clean_phone = "+92" + clean_phone[1:]
-    elif not clean_phone.startswith("+"): clean_phone = "+" + clean_phone
-
-    print(f"   - Normalized Phone: {clean_phone}")
-
-    # CHECK DOMAIN URL
-    if not DOMAIN_URL or "127.0.0.1" in DOMAIN_URL or "localhost" in DOMAIN_URL:
-        err_msg = f"❌ CRITICAL ERROR: DOMAIN_URL is '{DOMAIN_URL}'. Twilio cannot reach localhost. Use Ngrok."
-        print(err_msg)
-        return jsonify({"error": err_msg}), 500
-
+# =====================================================
+# DB LOGGING
+# =====================================================
+def log_conversation(call_sid, phone, order_code, stage, speaker, message, intent=None):
     try:
-        # Construct Webhook URL SAFELY
-        base = DOMAIN_URL.rstrip('/')
-        webhook_path = "/voice/webhook"
-
-        # 🟢 FIX: URL Encode the parameters to handle spaces
-        params = {'name': name, 'code': code}
-        query_string = urllib.parse.urlencode(params)
-
-        webhook_url = f"{base}{webhook_path}?{query_string}"
-        status_callback = f"{base}/voice/status_callback"
-
-        print(f"   - Webhook URL: {webhook_url}")
-
-        call = client.calls.create(
-            to=clean_phone,
-            from_=TWILIO_FROM,
-            url=webhook_url,
-            status_callback=status_callback,
-            status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
-            machine_detection='DetectMessageEnd'
-        )
-
-        print(f"✅ Call Initiated! SID: {call.sid}")
-
-        # Log to DB
-        conn = get_conn(); cur = conn.cursor()
+        conn = get_conn()
+        cur = conn.cursor()
         cur.execute("""
-            INSERT INTO call_logs (phone, customer_name, order_code, call_sid, status)
-            VALUES (%s, %s, %s, %s, 'queued')
-        """, (clean_phone, name, code, call.sid))
-        conn.commit(); cur.close(); conn.close()
-
-        return jsonify({"success": True, "call_sid": call.sid})
-
+            INSERT INTO call_conversations
+            (call_sid, phone, order_code, stage, speaker, message, intent)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """, (call_sid, phone, order_code, stage, speaker, message, intent))
+        conn.commit()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"❌ TWILIO API ERROR: {e}")
-        return jsonify({"error": str(e)}), 500
+        print("❌ LOG ERROR:", e)
 
-# --- 2. CONVERSATION FLOW ---
-
-@voice_bp.route("/voice/webhook", methods=['POST'])
-def voice_start():
-    print(f"\n🤖 [WEBHOOK] Voice Start Hit!")
-    name = request.args.get('name', '')
-    print(f"   - Customer: {name}")
-
-    resp = VoiceResponse()
-
-    if request.form.get('AnsweredBy') == 'machine_start':
-        print("   - Voicemail detected. Leaving message.")
-        resp.say("Asalam o Alaikum. Ye Lifafay dot pk se call thi. Hum baad mein call karein ge.")
-        return str(resp)
-
-    # Use Polly.Aditi for Urdu/Hindi accent
-    # Pass current query params forward to next step
-    next_url = url_for('voice.handle_identity', _external=True) + f"?{request.query_string.decode()}"
-
-    gather = Gather(num_digits=1, action=next_url, timeout=5)
-
-    gather.say(f"Asalam o Alaikum. Kya meri baat {name} se ho rahi hai?", voice='Polly.Aditi', language='en-IN')
-    gather.say("Agar jee haan, to 1 dabayein.", voice='Polly.Aditi', language='en-IN')
-    gather.say("Agar nahi, to 2 dabayein.", voice='Polly.Aditi', language='en-IN')
-
-    resp.append(gather)
-    resp.say("Hum koi input receive nahi kar sake. Allah Hafiz.", voice='Polly.Aditi', language='en-IN')
-
-    return str(resp)
-
-@voice_bp.route("/voice/handle_identity", methods=['POST'])
-def handle_identity():
-    digits = request.form.get('Digits')
-    print(f"\n🤖 [WEBHOOK] Handle Identity. Input: {digits}")
-
-    resp = VoiceResponse()
-
-    # Preserve params for next steps
-    qs = request.query_string.decode()
-
-    if digits == '1':
-        next_url = url_for('voice.handle_order_verify', _external=True) + f"?{qs}"
-        gather = Gather(num_digits=1, action=next_url)
-        gather.say("Shukriya. Main Ahmed baat kar raha hun Lifafay dot pk se.", voice='Polly.Aditi', language='en-IN')
-        gather.say("Humein aap ki taraf se order masool hua hai.", voice='Polly.Aditi', language='en-IN')
-        gather.say("Kya ye order aap ne place kiya hai? Haan ke liye 1 dabayein.", voice='Polly.Aditi', language='en-IN')
-        resp.append(gather)
-
-    elif digits == '2':
-        next_url = url_for('voice.handle_fraud_check', _external=True) + f"?{qs}"
-        gather = Gather(num_digits=1, action=next_url)
-        gather.say("Humein aap ke number se humari website par order mila hai.", voice='Polly.Aditi', language='en-IN')
-        gather.say("Kya ye order aap ne kiya hai? 1 dabayein.", voice='Polly.Aditi', language='en-IN')
-        gather.say("Agar nahi, to cancel karne ke liye 2 dabayein.", voice='Polly.Aditi', language='en-IN')
-        resp.append(gather)
-
-    return str(resp)
-
-@voice_bp.route("/voice/handle_order_verify", methods=['POST'])
-def handle_order_verify():
-    digits = request.form.get('Digits')
-    phone = request.form.get('To')
-    print(f"\n🤖 [WEBHOOK] Order Verify. Input: {digits}")
-
-    resp = VoiceResponse()
-
-    if digits == '1':
-        msg = (
-            "Zabardast. WhatsApp ki nayi policy ke mutabiq, hum customer ko pehle message nahi kar sakte. "
-            "Bara-e-meherbani, aap humein WhatsApp par 'Hi' likh kar bhejein taa-ke hum aapka design shuru kar sakein. "
-            "Humara number website par maujood hai, aur hum aapko SMS bhi bhej rahe hain. "
-            "Shukriya, Allah Hafiz."
+def update_outcome(call_sid, outcome):
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE call_logs SET outcome=%s WHERE call_sid=%s",
+            (outcome, call_sid)
         )
-        resp.say(msg, voice='Polly.Aditi', language='en-IN')
-        send_sms(phone)
-        update_call_outcome(request.form.get('CallSid'), 'confirmed_order')
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print("❌ OUTCOME ERROR:", e)
 
-    else:
-        resp.say("Order cancel karne ke liye shukriya. Allah Hafiz.", voice='Polly.Aditi', language='en-IN')
-        update_call_outcome(request.form.get('CallSid'), 'cancelled_order')
+# =====================================================
+# INTENT DETECTION (FAST)
+# =====================================================
+def analyze_intent(user_speech):
+    text = normalize_text(user_speech)
 
-    return str(resp)
+    yes_keywords = [
+        "haan", "haan ji", "ji", "ji haan",
+        "main", "main hoon", "main hun",
+        "bol raha", "bol rahi",
+        "haan main", "yes",
+        "haan cancel"
+    ]
 
-@voice_bp.route("/voice/handle_fraud_check", methods=['POST'])
-def handle_fraud_check():
-    digits = request.form.get('Digits')
-    code = request.args.get('code')
-    print(f"\n🤖 [WEBHOOK] Fraud Check. Input: {digits}")
+    no_keywords = [
+        "nahi", "nahin", "no",
+        "galat", "wrong",
+        "didi", "bhai", "behan",
+        "order nahi"
+    ]
+
+    for k in no_keywords:
+        if k in text:
+            return "NO"
+
+    for k in yes_keywords:
+        if k in text:
+            return "YES"
+
+    return "UNKNOWN"
+
+# =====================================================
+# SPEAK
+# =====================================================
+def speak(resp, text, call_sid=None, phone=None, code=None, stage=None):
+    resp.say(text, voice=BOT_VOICE)
+    if call_sid:
+        log_conversation(call_sid, phone, code, stage, "BOT", text)
+
+# =====================================================
+# START CALL
+# =====================================================
+@voice_bp.route("/api/make_call", methods=["POST"])
+def make_call():
+    data = request.get_json(force=True)
+    phone = data.get("phone")
+    name = data.get("name", "Customer")
+    code = data.get("order_code", "")
+
+    clean = phone.replace(" ", "").replace("-", "")
+    if clean.startswith("03"):
+        clean = "+92" + clean[1:]
+
+    params = urllib.parse.urlencode({
+        "stage": "intro",
+        "name": name,
+        "code": code
+    })
+
+    url = f"{DOMAIN_URL.rstrip('/')}/voice/conversation?{params}"
+
+    call = client.calls.create(
+        to=clean,
+        from_=TWILIO_FROM,
+        url=url,
+        status_callback=f"{DOMAIN_URL.rstrip('/')}/voice/status_callback",
+        status_callback_event=["initiated", "ringing", "answered", "completed"]
+    )
+
+    return jsonify({"success": True, "call_sid": call.sid})
+
+# =====================================================
+# CONVERSATION LOOP
+# =====================================================
+@voice_bp.route("/voice/conversation", methods=["GET", "POST"])
+def conversation():
+    stage = request.values.get("stage", "intro")
+    name = request.values.get("name", "Customer")
+    code = request.values.get("code", "")
+    speech = request.values.get("SpeechResult")
+    call_sid = request.values.get("CallSid")
+    phone = request.values.get("To")
 
     resp = VoiceResponse()
 
-    if digits == '2':
-        cancel_order_db(code)
-        resp.say("Aap ka shukriya. Hum ye fake order cancel kar rahe hain. Mazrat khwah hain.", voice='Polly.Aditi', language='en-IN')
-        update_call_outcome(request.form.get('CallSid'), 'cancelled_fake_order')
-    else:
-        # Redirect back to verify logic
-        qs = request.query_string.decode()
-        resp.redirect(url_for('voice.handle_order_verify', _external=True) + f"?{qs}")
+    def next_url(s):
+        return f"{DOMAIN_URL.rstrip('/')}/voice/conversation?" + urllib.parse.urlencode({
+            "stage": s,
+            "name": name,
+            "code": code
+        })
+
+    if speech:
+        log_conversation(call_sid, phone, code, stage, "USER", speech)
+        intent = analyze_intent(speech)
+        log_conversation(call_sid, phone, code, stage, "BOT", f"Intent={intent}", intent)
+
+    # ================= INTRO =================
+    if stage == "intro":
+        if speech:
+            if intent == "YES":
+                resp.redirect(next_url("verify"))
+            elif intent == "NO":
+                speak(resp, "Theek hai…", call_sid, phone, code, stage)
+                resp.redirect(next_url("fraud_confirm"))
+            else:
+                speak(resp, "Maaf kijiye. Jee haan ya nahi boliye.", call_sid, phone, code, stage)
+                resp.redirect(next_url("intro"))
+        else:
+            g = Gather(
+                input="speech",
+                language="en-IN",
+                timeout=3,
+                speechTimeout=0.5,
+                speechModel="phone_call",
+                action=next_url("intro")
+            )
+            speak(resp, f"Hello. Kya meri baat {name} se ho rahi hai?", call_sid, phone, code, stage)
+            resp.append(g)
+
+    # ================= VERIFY =================
+    elif stage == "verify":
+        if speech:
+            if intent == "YES":
+                speak(resp, "Theek hai…", call_sid, phone, code, stage)
+                speak(
+                    resp,
+                    "Aap ka order lif faa faay dot p k par confirm ho gaya hai. "
+                    "WhatsApp ki nayi policy ke mutabiq, business pehle message nahi bhej sakta. "
+                    "Design approval ke liye please aap humein WhatsApp par khud message bhejein. "
+                    "w w w dot lif faa faay dot p k. Shukriya.",
+                    call_sid, phone, code, stage
+                )
+                update_outcome(call_sid, "CONFIRMED")
+                resp.hangup()
+            else:
+                resp.redirect(next_url("fraud_confirm"))
+        else:
+            speak(resp, "Main lif faa faay dot p k se baat kar raha hoon.", call_sid, phone, code, stage)
+            g = Gather(
+                input="speech",
+                language="en-IN",
+                timeout=3,
+                speechTimeout=0.5,
+                speechModel="phone_call",
+                action=next_url("verify")
+            )
+            speak(resp, "Kya aap ne yeh order place kiya tha?", call_sid, phone, code, stage)
+            resp.append(g)
+
+    # ================= FRAUD CONFIRM =================
+    elif stage == "fraud_confirm":
+        if speech:
+            if intent == "YES":
+                speak(resp, "Theek hai. Hum yeh order cancel kar rahe hain.", call_sid, phone, code, stage)
+                update_outcome(call_sid, "CANCELLED")
+                resp.hangup()
+            else:
+                resp.redirect(next_url("verify"))
+        else:
+            speak(
+                resp,
+                "Main lif faa fay dot p k se baat kar raha hoon. "
+                "Cancel karna ho to 'haan cancel' boliye. "
+                "Order aap ka ho to 'nahi' boliye.",
+                call_sid, phone, code, stage
+            )
+            g = Gather(
+                input="speech",
+                language="en-IN",
+                timeout=3,
+                speechTimeout=0.5,
+                speechModel="phone_call",
+                action=next_url("fraud_confirm")
+            )
+            resp.append(g)
 
     return str(resp)
 
-@voice_bp.route("/voice/status_callback", methods=['POST'])
+# =====================================================
+# STATUS CALLBACK
+# =====================================================
+@voice_bp.route("/voice/status_callback", methods=["POST"])
 def status_callback():
-    sid = request.form.get('CallSid')
-    status = request.form.get('CallStatus')
-    print(f"📡 [CALLBACK] Call {sid} is now {status}")
+    call_sid = request.values.get("CallSid")
+    status = request.values.get("CallStatus")
 
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE call_logs SET status = %s WHERE call_sid = %s", (status, sid))
-    conn.commit(); cur.close(); conn.close()
+    if status == "completed":
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE call_logs
+                SET outcome = COALESCE(outcome, 'NO_DECISION')
+                WHERE call_sid=%s
+            """, (call_sid,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except:
+            pass
+
     return "OK", 200
 
-# --- HELPERS ---
-def send_sms(to_phone):
-    try:
-        print(f"📩 Sending SMS to {to_phone}")
-        client.messages.create(
-            body="ACTION REQUIRED: Please WhatsApp us to start your design.\nLink: https://wa.me/923001234567",
-            from_=TWILIO_FROM,
-            to=to_phone
-        )
-    except Exception as e: print(f"SMS Error: {e}")
+# =====================================================
+# TRANSCRIPT API (FRONTEND USES THIS)
+# =====================================================
+@voice_bp.route("/api/call_transcript")
+def call_transcript():
+    order_code = request.args.get("order_code")
 
-def cancel_order_db(code):
-    if not code: return
-    print(f"🚫 Cancelling Order {code}...")
-    conn = get_conn(); cur = conn.cursor()
-    # Note: Ensure 'Orders' table exists, or wrap in try/except
-    try:
-        cur.execute("UPDATE Orders SET order_status='Cancelled', order_status_id=9, updated_by='System - Call Bot' WHERE order_code=%s", (code,))
-        conn.commit()
-    except Exception as e: print(f"DB Cancel Error: {e}")
-    cur.close(); conn.close()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT speaker, message, created_at
+        FROM call_conversations
+        WHERE order_code=%s
+        ORDER BY created_at ASC
+    """, (order_code,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
 
-def update_call_outcome(sid, outcome):
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE call_logs SET outcome = %s WHERE call_sid = %s", (outcome, sid))
-    conn.commit(); cur.close(); conn.close()
+    return jsonify([
+        {
+            "speaker": r["speaker"],
+            "message": r["message"],
+            "created_at": r["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for r in rows
+    ])
