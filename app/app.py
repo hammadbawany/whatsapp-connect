@@ -583,6 +583,81 @@ def typing():
     app.config["typing_states"][phone] = {"user": session["user_id"], "typing": typing, "at": datetime.utcnow().isoformat()}
     return jsonify({"ok": True})
 
+#version with tags
+@app.route("/list_users")
+@login_required
+def list_users():
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # 1. Get Account ID
+    cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    row = cur.fetchone()
+    if not row:
+        cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+
+    if not row:
+        cur.close(); conn.close()
+        return jsonify([])
+
+    account_id = row['id']
+
+    # 2. Get Users + Last Message
+    query = """
+        WITH LastMsg AS (
+            SELECT
+                user_phone,
+                MAX(timestamp) as last_ts,
+                COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
+            FROM messages
+            WHERE whatsapp_account_id = %s
+            GROUP BY user_phone
+        )
+        SELECT
+            c.phone,
+            c.name,
+            lm.last_ts,
+            COALESCE(lm.unread_count, 0) as unread_count,
+            m.message as last_message,
+            m.media_type
+        FROM contacts c
+        INNER JOIN LastMsg lm ON c.phone = lm.user_phone
+        LEFT JOIN messages m ON lm.user_phone = m.user_phone AND lm.last_ts = m.timestamp
+        ORDER BY lm.last_ts DESC
+    """
+    cur.execute(query, (account_id,))
+    users = cur.fetchall()
+
+    # 3. Get Tags for these users (Efficient Batch Fetch)
+    if users:
+        phones = [u['phone'] for u in users]
+        cur.execute("""
+            SELECT ct.contact_phone, t.name, t.color
+            FROM contact_tags ct
+            JOIN tags t ON ct.tag_id = t.id
+            WHERE ct.contact_phone = ANY(%s)
+        """, (phones,))
+        tags_rows = cur.fetchall()
+
+        # Map tags to phones
+        tags_map = {}
+        for row in tags_rows:
+            p = row['contact_phone']
+            if p not in tags_map: tags_map[p] = []
+            tags_map[p].append({'name': row['name'], 'color': row['color']})
+
+        # Attach tags to user objects
+        for u in users:
+            u['tags'] = tags_map.get(u['phone'], [])
+            if u['last_ts']:
+                u['last_ts'] = u['last_ts'].isoformat()
+                if not u['last_ts'].endswith("Z"): u['last_ts'] += "Z"
+
+    cur.close(); conn.close()
+    return jsonify(users)
+
+'''
 # ---------- API endpoints (list, history, send) ----------
 @app.route("/list_users")
 @login_required
@@ -638,7 +713,7 @@ def list_users():
             if not r['last_ts'].endswith("Z"): r['last_ts'] += "Z"
 
     return jsonify(rows)
-
+'''
 @app.route("/history")
 @login_required
 def history():
@@ -3143,7 +3218,8 @@ def detect_voice_or_audio(duration_seconds):
 @app.route("/api/external/send_order", methods=["POST"])
 def external_send_order():
     try:
-        # =====================================================
+
+            # =====================================================
         # 1️⃣ SECURITY CHECK
         # =====================================================
         incoming_key = request.headers.get("X-API-Key")
@@ -3179,7 +3255,12 @@ def external_send_order():
         # =====================================================
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-
+        cur.execute("""
+        INSERT INTO contact_tags (contact_phone, tag_id)
+        VALUES (%s, %s)
+        ON CONFLICT DO NOTHING
+        """, (phone, 1))
+        
         cur.execute("""
             SELECT id, phone_number_id, access_token
             FROM whatsapp_accounts
@@ -3498,3 +3579,66 @@ def sync_templates():
 @app.route("/admin/templates")
 def admin_templates_page():
     return render_template("admin_templates.html")
+
+
+# ==========================================
+# 🟢 TAG MANAGEMENT ROUTES
+# ==========================================
+
+@app.route("/tags", methods=["GET", "POST"])
+@login_required
+def manage_tags():
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # Create a new Tag
+    if request.method == "POST":
+        data = request.json
+        name = data.get("name")
+        color = data.get("color", "#00a884")
+        try:
+            cur.execute("INSERT INTO tags (name, color) VALUES (%s, %s)", (name, color))
+            conn.commit()
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"error": "Tag likely exists"}), 400
+        finally:
+            cur.close(); conn.close()
+
+    # List all Tags
+    cur.execute("SELECT * FROM tags ORDER BY name")
+    tags = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify(tags)
+
+@app.route("/contact_tags", methods=["GET", "POST"])
+@login_required
+def contact_tags_route():
+    conn = get_conn(); cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    if request.method == "POST":
+        # Assign or Remove a tag from a user
+        data = request.json
+        phone = normalize_phone(data.get("phone"))
+        tag_id = data.get("tag_id")
+        action = data.get("action") # 'add' or 'remove'
+
+        if action == 'add':
+            cur.execute("INSERT INTO contact_tags (contact_phone, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (phone, tag_id))
+        elif action == 'remove':
+            cur.execute("DELETE FROM contact_tags WHERE contact_phone = %s AND tag_id = %s", (phone, tag_id))
+
+        conn.commit()
+        cur.close(); conn.close()
+        return jsonify({"success": True})
+
+    # Get tags for a specific user
+    phone = normalize_phone(request.args.get("phone"))
+    cur.execute("""
+        SELECT t.id, t.name, t.color
+        FROM tags t
+        JOIN contact_tags ct ON t.id = ct.tag_id
+        WHERE ct.contact_phone = %s
+    """, (phone,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return jsonify(rows)

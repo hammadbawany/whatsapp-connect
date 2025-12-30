@@ -7,6 +7,126 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    /* Update Filter Badge Styling */
+    /* Filter Bar Container */
+    .filter-bar {
+        padding: 8px 15px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        border-bottom: 1px solid var(--border-color);
+        overflow-x: auto; /* Enable scrolling */
+        white-space: nowrap;
+    }
+    .filter-bar::-webkit-scrollbar {
+    height: 3px;            /* Slim scrollbar height */
+    display: block;         /* Ensure it is visible */
+}
+.filter-bar::-webkit-scrollbar-track {
+    background: transparent; /* Invisible track */
+}
+
+.filter-bar::-webkit-scrollbar-thumb {
+    background: #37404a;    /* Dark Gray Handle */
+    border-radius: 3px;     /* Rounded edges */
+}
+
+.filter-bar::-webkit-scrollbar-thumb:hover {
+    background: #55606c;    /* Lighter on hover */
+}
+
+/* 🟢 3. FIREFOX SUPPORT */
+.filter-bar {
+    scrollbar-width: thin;  /* Thin scrollbar */
+    scrollbar-color: #37404a transparent;
+}
+
+    /* Individual Filter Chip */
+    .filter-chip {
+        padding: 6px 12px;
+        border-radius: 24px; /* Pill shape */
+        background: #202c33; /* Dark gray */
+        color: #8696a0;
+        font-size: 13px;
+        cursor: pointer;
+        border: 1px solid #2a3942;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+    }
+
+    .filter-chip:hover {
+        background: #2a3942;
+    }
+
+    /* Active State (Green) */
+    .filter-chip.active {
+        background: #00a884; /* WhatsApp Green */
+        color: #111b21;      /* Dark Text */
+        border-color: #00a884;
+    }
+    /*.filter-badge { background: var(--wati-green); color: black; border-radius: 50%; padding: 2px 6px; font-size: 10px; margin-left: 5px; font-weight: bold; display:inline; }
+
+     The Count Bubble */
+    .filter-badge {
+        display: inline-flex;       /* 🟢 Fixes visibility & alignment */
+
+        background: var(--wati-green); /* Slightly lighter gray */
+        color: black;
+        border-radius: 50%;
+        padding: 0 5px;
+        min-width: 18px;
+        height: 18px;
+        font-size: 10px;
+        font-weight: 600;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Bubble color when Chip is Active */
+    .filter-chip.active .filter-badge {
+        background: #fff;    /* White bubble */
+        color: #00a884;      /* Green text */
+    }
+
+
+    /* TAGS IN SIDEBAR */
+.tag-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+.tag-pill {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: white;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+/* TAG MODAL */
+#tag-selection-area { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
+.tag-choice {
+    padding: 6px 12px;
+    border: 1px solid #2a3942;
+    border-radius: 15px;
+    cursor: pointer;
+    color: #d1d7db;
+    transition: 0.2s;
+}
+.tag-choice:hover { background: #2a3942; }
+.tag-choice.selected {
+    border-color: transparent;
+    color: #fff;
+    /* Background set dynamically via JS based on tag color */
+}
+
+
+
     .deleted-msg {
     display: inline-block;
     font-style: italic;
@@ -271,8 +391,7 @@
         .filter-bar { padding: 8px 15px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border-color); }
         .filter-chip { padding: 5px 12px; border-radius: 20px; background: var(--header-bg); color: var(--secondary-text); font-size: 13px; cursor: pointer; border: 1px solid transparent; }
         .filter-chip.active { background: var(--accent); color: #fff; }
-        /* Badge for filter chip */
-        .filter-badge { background: var(--wati-green); color: black; border-radius: 50%; padding: 2px 6px; font-size: 10px; margin-left: 5px; font-weight: bold; display:none; }
+        /* Badge for filter chip*/
 
         .search-box { padding: 8px 12px; }
         .search-input { width: 100%; background: var(--header-bg); border: none; padding: 8px 30px 8px 15px; border-radius: 8px; color: #fff; outline: none; }
@@ -388,9 +507,17 @@
             </div>
         </div>
         <div class="filter-bar">
+            <!-- Static Filters -->
             <div class="filter-chip active" onclick="setFilter('all', this)">All</div>
-            <div class="filter-chip" onclick="setFilter('unread', this)">Unread <span id="filter-unread" class="filter-badge"></span></div>
+            <div class="filter-chip" onclick="setFilter('unread', this)">
+                Unread <span id="filter-unread" class="filter-badge">0</span>
+            </div>
+
+            <!-- 🟢 DYNAMIC TAGS CONTAINER -->
+            <div id="tag-filters" style="display:flex; gap:10px;"></div>
         </div>
+
+
         <div class="search-box"><input type="text" class="search-input" placeholder="Search or start new chat" onkeyup="filterChats(this.value)"></div>
         <div id="chat-list"></div>
     </aside>
@@ -399,10 +526,18 @@
         <div class="chat-header">
             <div class="session-timer" id="session-timer" title="Time remaining to reply">--</div>
             <div class="chat-avatar" id="header-avatar" style="width: 35px; height: 35px; font-size: 14px;"></div>
-            <div class="chat-title" style="margin-left: 10px;">
-                <div id="active-contact">Select a chat</div>
-                <div id="active-name" class="chat-subtitle"></div>
+            <div class="chat-title" style="margin-left: 10px; display:flex; align-items:center; width:100%;">
+                <div>
+                    <div id="active-contact">Select a chat</div>
+                    <div id="active-name" class="chat-subtitle"></div>
+                </div>
+                <!-- TAG BUTTON -->
+                <span class="material-icons icon-btn" onclick="openTagModal()" title="Manage Tags"
+                      style="margin-left: auto; color: var(--accent); display:none;" id="header-tag-btn">
+                    label
+                </span>
             </div>
+
         </div>
         <div id="messages">
             <div style="text-align: center; margin-top: 20%; color: var(--secondary-text);">
@@ -515,6 +650,19 @@
     <div class="menu-item danger" data-action="delete-everyone">Delete for everyone</div>
 </div>
 
+<div class="modal-overlay" id="tag-modal">
+    <div class="modal">
+        <h3>Manage Tags</h3>
+        <input type="text" id="new-tag-name" placeholder="Create new tag..." style="margin-bottom:10px;">
+        <button class="btn btn-sec" onclick="createNewTag()" style="margin-bottom:15px; width:100%;">+ Create Tag</button>
+
+        <div id="tag-selection-area">Loading tags...</div>
+
+        <div class="modal-buttons" style="margin-top:20px;">
+            <button class="btn btn-primary" onclick="closeModal('tag-modal')">Done</button>
+        </div>
+    </div>
+</div>
 
 
 <script>
@@ -522,6 +670,11 @@
     // 1. GLOBAL VARIABLES & STATE
     // ==========================================
     let currentPhone = null;
+    let availableTags = [];
+    let taggingPhone = null;
+    let lastTagInteraction = 0;
+
+    let lastTagStateSignature = "";
 
     // TIMERS
     let chatLoopTimer = null;
@@ -559,7 +712,14 @@
 
     // DOM ELEMENTS (Loaded later)
     let msgInputEl, captionInputEl;
-
+    async function loadGlobalTags() {
+        try {
+            const r = await fetch('/tags');
+            availableTags = await r.json();
+            // We don't render here anymore,
+            // because renderTagFilters() inside renderChatList() will do it.
+        } catch(e) { console.error(e); }
+    }
     // --- INITIALIZATION ---
     document.addEventListener("DOMContentLoaded", () => {
         msgInputEl = document.getElementById('msg-input');
@@ -569,6 +729,7 @@
         loadQuickReplies();
         loadChats();
         chatListTimer = setInterval(loadChats, 4000);
+        loadGlobalTags();
 
         // Event Listeners
         if(msgInputEl) {
@@ -620,6 +781,7 @@
         if (chatLoopTimer) { clearTimeout(chatLoopTimer); chatLoopTimer = null; }
         if (chatHistoryTimer) { clearInterval(chatHistoryTimer); chatHistoryTimer = null; }
         if (chatAbortController) { chatAbortController.abort(); }
+        document.getElementById('header-tag-btn').style.display = 'block';
 
         // 2. Reset State
         const newUrl = `${window.location.pathname}?phone=${phone}`;
@@ -851,6 +1013,9 @@
     // ==========================================
 
     async function loadChats() {
+      if (Date.now() - lastTagInteraction < 3000) {
+          return;
+      }
         if (document.querySelector('.search-input').value.trim() !== "") return;
         try {
             const resp = await fetch('/list_users');
@@ -870,42 +1035,85 @@
     }
 
     function renderChatList() {
-        const list = document.getElementById('chat-list');
-        const totalUnread = allChats.filter(c => (c.unread_count || 0) > 0).length;
-        const badgeEl = document.getElementById('filter-unread');
-        if (badgeEl) { badgeEl.innerText = totalUnread; badgeEl.style.display = totalUnread > 0 ? 'inline-block' : 'none'; }
+      const list = document.getElementById('chat-list');
 
-        const filtered = allChats.filter(c => {
-            if (currentFilter === 'unread') return c.unread_count > 0;
-            return true;
-        });
+      // 1. Update Global Unread Badge
+      const totalUnread = allChats.filter(c => (c.unread_count || 0) > 0).length;
+      const badgeEl = document.getElementById('filter-unread');
+      if (badgeEl) {
+          badgeEl.innerText = totalUnread;
+          badgeEl.style.display = totalUnread > 0 ? 'inline-block' : 'none';
+      }
 
-        filtered.forEach((c, index) => {
-            let div = document.getElementById(`chat-item-${c.phone}`);
-            let unreadCount = c.unread_count || 0;
-            if (locallyMarkedUnread.has(c.phone)) unreadCount = Math.max(unreadCount, 1);
-            const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
-            const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-            const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
-            const bg = getAvatarColor(c.phone);
-            const ini = c.name ? getInitials(c.name) : "?";
+      // 🟢 2. REFRESH TAG COUNTS HERE
+      // This ensures that as soon as chats load, the bubbles update
+      if (Date.now() - lastTagInteraction > 3000) {
+          renderTagFilters();
+      }
 
-            const html = `<div class="chat-avatar" style="background-color:${bg};">${ini}</div><div class="chat-info"><div class="chat-top"><span class="chat-name">${c.name||c.phone}</span><span class="chat-time">${timeStr}</span></div><div class="chat-top"><span class="chat-msg">${previewMsg}</span>${unreadHtml}</div></div>`;
+      // 3. Filter Logic (Standard)
+      const filtered = allChats.filter(c => {
+          if (currentFilter === 'unread') return c.unread_count > 0;
+          if (currentFilter === 'all') return true;
+          if (currentFilter === 'none') return !c.tags || c.tags.length === 0;
+          if (c.tags && c.tags.some(t => t.name === currentFilter)) return true;
+          return false;
+      });
 
-            if (!div) {
-                div = document.createElement('div'); div.id = `chat-item-${c.phone}`;
-                div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
-                div.onclick = () => openChat(c.phone, c.name);
-                div.oncontextmenu = (e) => showContextMenu(e, c.phone);
-                div.innerHTML = html; div.dataset.phone = c.phone;
-                list.appendChild(div);
-            } else {
-                if (div.innerHTML !== html) div.innerHTML = html;
-                if(currentPhone === c.phone) div.classList.add('active'); else div.classList.remove('active');
-            }
-            if (list.children[index] !== div) list.insertBefore(div, list.children[index]);
-        });
-    }
+      list.innerHTML = "";
+
+      // 4. Render Rows
+      filtered.forEach((c) => {
+          let tagsHtml = '';
+          if (c.tags && c.tags.length > 0) {
+              tagsHtml = `<div class="tag-container" style="margin-top:2px;">` +
+                         c.tags.map(t => `<span class="tag-pill" style="background:${t.color}">${t.name}</span>`).join('') +
+                         `</div>`;
+          }
+
+          const unreadCount = c.unread_count || 0;
+          const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
+          const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+          const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
+          const bg = getAvatarColor(c.phone);
+          const ini = c.name ? getInitials(c.name) : "?";
+
+          const div = document.createElement('div');
+          div.id = `chat-item-${c.phone}`;
+          div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+          div.onclick = () => openChat(c.phone, c.name);
+
+          div.innerHTML = `
+              <div class="chat-avatar" style="background-color:${bg};">${ini}</div>
+              <div class="chat-info">
+                  <div class="chat-top">
+                      <div style="display:flex; align-items:center; gap: 6px; overflow:hidden;">
+                          <span class="chat-name">${c.name||c.phone}</span>
+                          <span class="material-icons"
+                                style="font-size: 16px; color: #8696a0; cursor: pointer; opacity: 0.8;"
+                                title="Manage Tags"
+                                onmouseover="this.style.color='#00a884'"
+                                onmouseout="this.style.color='#8696a0'"
+                                onclick="event.stopPropagation(); openTagModal('${c.phone}')">
+                              label
+                          </span>
+                      </div>
+                      <span class="chat-time">${timeStr}</span>
+                  </div>
+                  <div class="chat-top">
+                      <div style="overflow:hidden; flex:1;">
+                          <span class="chat-msg">${previewMsg}</span>
+                          ${tagsHtml}
+                      </div>
+                      ${unreadHtml}
+                  </div>
+              </div>`;
+          list.appendChild(div);
+      });
+  }
+
+
+
 
     // --- UTILS ---
     function checkInput() {
@@ -1089,6 +1297,208 @@
             item.style.display = (name.includes(q) || phone.includes(q) || phone.includes(qNormalized)) ? 'flex' : 'none';
         });
     }
+
+
+
+    async function openTagModal(specificPhone = null) {
+        // 1. Determine which user we are tagging
+        const target = specificPhone || currentPhone;
+        if (!target) return;
+
+        taggingPhone = target; // Store globally
+
+        // 2. Show Modal Instantly
+        document.getElementById('tag-modal').style.display = 'grid';
+        document.querySelector('#tag-modal h3').innerText = `Tags: ${taggingPhone}`;
+        const container = document.getElementById('tag-selection-area');
+        container.innerHTML = '';
+
+        // 3. Get the user's current tags (Just to know what to highlight)
+        // We look in 'allChats' because it's already loaded in memory
+        const chatUser = allChats.find(c => c.phone === target);
+
+        // Create a simple list of Tag IDs that this user currently has
+        const userTagIds = chatUser && chatUser.tags
+            ? chatUser.tags.map(t => t.id || t.name) // Handle ID or Name match safely
+            : [];
+
+        // 4. Render the MASTER LIST of tags (from Global Config)
+        // 'availableTags' comes from the /tags endpoint (Database), so it includes everything.
+        availableTags.forEach(t => {
+            // Check if the user has this tag (by Name match usually safest if IDs vary)
+            // Adjust logic to match property (t.name)
+            const isSelected = chatUser && chatUser.tags && chatUser.tags.some(ut => ut.name === t.name);
+
+            const div = document.createElement('div');
+            div.className = `tag-choice ${isSelected ? 'selected' : ''}`;
+            div.innerText = t.name;
+            div.style.borderColor = t.color;
+
+            // Visual Logic
+            if(isSelected) {
+                div.style.backgroundColor = t.color;
+                div.style.color = '#fff';
+            } else {
+                div.style.backgroundColor = 'transparent';
+                div.style.color = t.color; // Colored text when not selected
+            }
+
+            // Click Handler
+            div.onclick = () => toggleTagAssignment(t, div);
+            container.appendChild(div);
+        });
+    }
+
+
+    async function toggleTagAssignment(tag, el) {
+        if (!taggingPhone) return;
+
+        // ✅ CORRECT VARIABLE (THIS IS THE FIX)
+        lastTagInteraction = Date.now();
+
+        // 2. VISUAL TOGGLE
+        const isSelected = el.classList.contains('selected');
+        const action = isSelected ? 'remove' : 'add';
+
+        el.classList.toggle('selected');
+        if (!isSelected) {
+            el.style.backgroundColor = tag.color;
+            el.style.color = '#fff';
+        } else {
+            el.style.backgroundColor = 'transparent';
+            el.style.color = tag.color;
+        }
+
+        // 3. UPDATE LOCAL MEMORY (Optimistic Data)
+        const chatUser = allChats.find(c => c.phone === taggingPhone);
+        if (chatUser) {
+            if (!chatUser.tags) chatUser.tags = [];
+
+            if (action === 'add') {
+                if (!chatUser.tags.some(t => t.name === tag.name)) {
+                    chatUser.tags.push({
+                        id: tag.id,
+                        name: tag.name,
+                        color: tag.color
+                    });
+                }
+            } else {
+                chatUser.tags = chatUser.tags.filter(t => t.name !== tag.name);
+            }
+        }
+
+        // 4. REFRESH UI ONLY (NO SERVER POLL)
+        renderChatList();
+
+        // 5. SEND TO SERVER (ASYNC, NO UI BLOCK)
+        fetch('/contact_tags', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                phone: taggingPhone,
+                tag_id: tag.id,
+                action: action
+            })
+        }).catch(err => console.error("Tag sync failed", err));
+    }
+
+    function markTagInteraction() {
+        lastTagInteraction = Date.now();
+    }
+
+
+
+
+async function createNewTag() {
+    const name = document.getElementById('new-tag-name').value;
+    if(!name) return;
+
+    // Random color generator
+    const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+
+    await fetch('/tags', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name, color: color })
+    });
+
+    document.getElementById('new-tag-name').value = '';
+    await loadGlobalTags(); // Refresh global list
+    openTagModal(); // Refresh modal list
+}
+function renderTagFilters() {
+    const container = document.getElementById('tag-filters');
+    if (!container) return;
+
+    // 1. Calculate Counts (Data Logic)
+    const tagCounts = {};
+    let untaggedCount = 0;
+
+    // Initialize to 0
+    availableTags.forEach(t => tagCounts[t.name] = 0);
+
+    // Count chats
+    allChats.forEach(c => {
+        if (!c.tags || c.tags.length === 0) {
+            untaggedCount++;
+        } else {
+            c.tags.forEach(t => {
+                if (tagCounts[t.name] !== undefined) {
+                    tagCounts[t.name]++;
+                } else {
+                    tagCounts[t.name] = 1;
+                }
+            });
+        }
+    });
+
+    // 🟢 2. SMART CHECK: Create a "signature" of the current state
+    // This string changes ONLY if counts change, or the active filter changes, or tags change.
+    const currentSignature = JSON.stringify(tagCounts) + `|Untagged:${untaggedCount}|Active:${currentFilter}|TotalTags:${availableTags.length}`;
+
+    // If nothing changed since the last render, STOP here.
+    if (currentSignature === lastTagStateSignature) {
+        return;
+    }
+
+    // Save the new signature for next time
+    lastTagStateSignature = currentSignature;
+
+    // 3. Render DOM (Only runs if data changed)
+    container.innerHTML = '';
+
+    // -- Untagged Chip --
+    const noneActive = currentFilter === 'none';
+    const noneBadge = untaggedCount > 0
+        ? `<span class="filter-badge">${untaggedCount}</span>`
+        : '';
+
+    const noneChip = document.createElement('div');
+    noneChip.className = `filter-chip ${noneActive ? 'active' : ''}`;
+    noneChip.innerHTML = `Untagged ${noneBadge}`;
+    noneChip.onclick = function() { setFilter('none', this); };
+    container.appendChild(noneChip);
+
+    // -- Tag Chips --
+    availableTags.forEach(tag => {
+        const count = tagCounts[tag.name] || 0;
+        const isActive = currentFilter === tag.name;
+
+        const badgeHtml = count > 0
+            ? `<span class="filter-badge">${count}</span>`
+            : '';
+
+        const chip = document.createElement('div');
+        chip.className = `filter-chip ${isActive ? 'active' : ''}`;
+        chip.innerHTML = `${tag.name} ${badgeHtml}`;
+        chip.onclick = function() { setFilter(tag.name, this); };
+
+        container.appendChild(chip);
+    });
+}
+
+
+
 </script>
 </body>
 </html>
