@@ -757,7 +757,10 @@
         // Close menus on click outside
         window.onclick = function(e) {
             if (!e.target.matches('.msg-actions')) document.getElementById('msg-context-menu').style.display='none';
-            if (!e.target.matches('.context-menu-item')) document.getElementById('context-menu').style.display='none';
+            document.addEventListener('click', function () {
+                const menu = document.getElementById('context-menu');
+                if (menu) menu.style.display = 'none';
+            });
             if (!e.target.closest('.attach-menu') && !e.target.closest('.icon-btn')) document.getElementById('attach-menu').style.display='none';
         }
     });
@@ -1071,7 +1074,8 @@
                          `</div>`;
           }
 
-          const unreadCount = c.unread_count || 0;
+          const isLocallyUnread = locallyMarkedUnread.has(c.phone);
+          const unreadCount = isLocallyUnread ? Math.max(1, c.unread_count || 0) : (c.unread_count || 0);
           const unreadHtml = unreadCount > 0 ? `<div class="unread-badge">${unreadCount}</div>` : '';
           const timeStr = c.last_ts ? new Date(c.last_ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
           const previewMsg = c.media_type ? `📷 ${c.media_type}` : (c.last_message || '');
@@ -1497,6 +1501,24 @@ function renderTagFilters() {
     });
 }
 
+document.addEventListener('contextmenu', function (e) {
+    const chatItem = e.target.closest('.chat-item');
+    if (!chatItem) return;
+
+    e.preventDefault(); // ⛔ block browser menu
+
+    const phone = chatItem.id?.replace('chat-item-', '');
+    if (!phone) return;
+
+    contextMenuPhone = phone;
+
+    const menu = document.getElementById('context-menu');
+    if (!menu) return;
+
+    menu.style.display = 'block';
+    menu.style.left = e.pageX + 'px';
+    menu.style.top = e.pageY + 'px';
+});
 
 
 </script>
