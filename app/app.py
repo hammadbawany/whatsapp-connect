@@ -924,43 +924,7 @@ def send_text():
         "is_reply": bool(reply_to)
     })
 '''
-def send_text_via_meta(phone, text):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "text",
-        "text": {"body": text}
-    }
-
-    print("\n" + "="*80)
-    print("SEND_TEXT → PAYLOAD")
-    print(payload)
-    print("="*80)
-
-    resp = requests.post(
-        f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages",
-        headers={
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json=payload,
-        timeout=10
-    )
-
-    print("\n" + "="*80)
-    print("SEND_TEXT ← RESPONSE")
-    print(resp.text)
-    print("="*80)
-
-    return resp
-
-@app.route("/send_text", methods=["POST"])
-def send_text():
-    data = request.json
-    phone = normalize_phone(data.get("phone"))
-    text = data.get("text")
-    reply_to = data.get("reply_to")  # may be None
-
+def send_text_via_meta_and_db(phone, text, reply_to=None):
     # 🔒 Validate reply target
     if reply_to and not reply_to.startswith("wamid."):
         log("❌ INVALID REPLY TARGET (not a wamid)", reply_to)
@@ -978,7 +942,7 @@ def send_text():
 
     if not acc:
         cur.close(); conn.close()
-        return jsonify({"error": "No WhatsApp account"}), 400
+        raise Exception("No WhatsApp account")
 
     url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
     headers = {
@@ -997,16 +961,13 @@ def send_text():
 
     log("SEND_TEXT → PAYLOAD", payload)
 
-    resp = requests.post(url, headers=headers, json=payload)
+    resp = requests.post(url, headers=headers, json=payload, timeout=10)
     resp_json = resp.json()
 
     log("SEND_TEXT ← RESPONSE", resp_json)
 
     messages = resp_json.get("messages")
     wa_id = messages[0].get("id") if isinstance(messages, list) and messages else None
-
-    if not wa_id:
-        log("❌ NO WHATSAPP MESSAGE ID RETURNED", resp_json)
 
     cur.execute("""
         INSERT INTO messages (
@@ -1031,11 +992,23 @@ def send_text():
     conn.commit()
     cur.close(); conn.close()
 
+    return wa_id
+
+@app.route("/send_text", methods=["POST"])
+def send_text():
+    data = request.json
+    phone = normalize_phone(data.get("phone"))
+    text = data.get("text")
+    reply_to = data.get("reply_to")
+
+    wa_id = send_text_via_meta_and_db(phone, text, reply_to)
+
     return jsonify({
         "success": True,
         "whatsapp_id": wa_id,
         "is_reply": bool(reply_to)
     })
+
 
 
 @app.route("/send_media", methods=["POST"])
@@ -3772,7 +3745,8 @@ def automation_preview():
     return jsonify(preview or {})
 
 def send_text_internal(phone, text):
-    send_text_via_meta(phone, text)
+    send_text_via_meta_and_db(phone, text)
+
 
 
     print("[AUTOMATION] send_text_internal →", resp.status_code, resp.text)
