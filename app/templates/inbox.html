@@ -1140,6 +1140,8 @@
           const div = document.createElement('div');
           div.id = `chat-item-${c.phone}`;
           div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+          div.dataset.phone = c.phone; // <--- THIS LINE WAS MISSING
+
           div.onclick = () => openChat(c.phone, c.name);
 
           div.innerHTML = `
