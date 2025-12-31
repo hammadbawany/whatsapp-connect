@@ -31,6 +31,8 @@ from app.plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.plugins.auto_design_sender import run_scheduled_automation
 from app.plugins.voice_bot import voice_bp  # <--- IMPORT
+from app.plugins.automations import run_automations
+
 import socket
 import atexit
 print("[ENV CHECK] R2_ENDPOINT =", os.environ.get("R2_ENDPOINT"))
@@ -44,13 +46,15 @@ app.register_blueprint(voice_bp)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-this")
 VERIFY_TOKEN = "lifafay123"
 WHATSAPP_TOKEN = os.getenv("WA_TOKEN")
+APP_BASE_URL = os.getenv("APP_BASE_URL")
 
 PHONE_NUMBER_ID = os.getenv("WA_PHONE")
 WABA_ID = os.getenv("WA_WABA_ID")
 
 
 APP_KEY = "lns4lbjw0ka6sen"
-REDIRECT_URI = "http://127.0.0.1:5000/dropbox/callback"
+REDIRECT_URI = os.getenv("DROPBOX_REDIRECT_URI")
+
 
 
 @app.route("/")
@@ -83,6 +87,9 @@ def log(title, payload):
     sys.stdout.flush()
 
 
+def auto_log(msg):
+    print(f"[AUTOMATION] {msg}", file=sys.stdout)
+    sys.stdout.flush()
 
 
 def get_active_account_id():
@@ -412,6 +419,16 @@ def webhook():
                             wa_id,
                             context_whatsapp_id
                         ))
+
+                        conn.commit()  # 🔥 MUST COMMIT FIRST
+
+                        # 🔥 BACKGROUND AUTOMATION (CORRECT)
+                        run_automations(
+                            cur=cur,
+                            phone=phone,
+                            message_text=text,
+                            send_text=send_text_internal
+                        )
 
                 # ---------- MEDIA ----------
                 elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
@@ -3260,7 +3277,7 @@ def external_send_order():
         VALUES (%s, %s)
         ON CONFLICT DO NOTHING
         """, (phone, 1))
-        
+
         cur.execute("""
             SELECT id, phone_number_id, access_token
             FROM whatsapp_accounts
@@ -3642,3 +3659,95 @@ def contact_tags_route():
     rows = cur.fetchall()
     cur.close(); conn.close()
     return jsonify(rows)
+
+
+
+
+@app.route("/automation/execute", methods=["POST"])
+def automation_execute():
+    auto_log("🚀 /automation/execute hit")
+
+    try:
+        data = request.get_json(silent=True) or {}
+        auto_log(f"📥 Payload received: {data}")
+
+        phone = data.get("phone")
+        intent = data.get("intent")
+
+        auto_log(f"📞 Phone raw: {phone}")
+        auto_log(f"🧠 Intent: {intent}")
+
+        if not phone or not intent:
+            auto_log("❌ Missing phone or intent")
+            return jsonify({"error": "missing phone or intent"}), 400
+
+        phone = normalize_phone(phone)
+        auto_log(f"📞 Phone normalized: {phone}")
+
+        if not phone:
+            auto_log("❌ Phone normalization failed")
+            return jsonify({"error": "invalid phone"}), 400
+
+        auto_log("🔌 Opening DB connection")
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        try:
+            auto_log("🧩 Importing run_automations")
+            from app.plugins.automations import run_automations
+
+            auto_log("▶️ Running automations")
+            run_automations(
+                cur=cur,
+                phone=phone,
+                message_text=intent,
+                send_text=send_text_internal,
+                send_attachment=None
+            )
+
+
+            auto_log("💾 Committing DB")
+            conn.commit()
+
+        except Exception as e:
+            auto_log("🔥 ERROR inside automation execution")
+            traceback.print_exc()
+            conn.rollback()
+            return jsonify({"error": str(e)}), 500
+
+        finally:
+            auto_log("🔒 Closing DB")
+            cur.close()
+            conn.close()
+
+        auto_log("✅ Automation executed successfully")
+        return jsonify({"success": True})
+
+    except Exception as e:
+        auto_log("💥 FATAL ERROR in /automation/execute")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+@app.route("/automation/preview", methods=["POST"])
+@login_required
+def automation_preview():
+    data = request.json
+    message = data.get("message", "")
+
+    from app.plugins.automations import preview_automation
+    preview = preview_automation(message)
+
+    return jsonify(preview or {})
+
+def send_text_internal(phone, text):
+    resp = requests.post(
+        f"{APP_BASE_URL}/send_text",
+        json={"phone": phone, "text": text},
+        timeout=10
+    )
+    print("[AUTOMATION] send_text status:", resp.status_code, resp.text)
+    if resp.status_code != 200:
+        raise Exception("send_text failed")

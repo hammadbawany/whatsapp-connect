@@ -545,6 +545,30 @@
                 <p>Send and receive messages without keeping your phone online.</p>
             </div>
         </div>
+        <!-- 🟢 AUTOMATION PREVIEW BANNER -->
+        <div id="automation-banner"
+             style="display:none; margin:8px 16px; padding:10px;
+                    border:1px solid #2a3942;
+                    background:#0f1f17;
+                    border-radius:6px;">
+
+            <div style="font-weight:600; margin-bottom:6px;">
+                🤖 Automation suggestion
+            </div>
+
+            <div id="automation-text"
+                 style="font-size:14px; color:#d1d7db; margin-bottom:8px;">
+            </div>
+
+            <div style="display:flex; gap:8px;">
+                <button class="btn btn-primary" id="automation-send">
+                    Send
+                </button>
+                <button class="btn btn-sec" id="automation-ignore">
+                    Ignore
+                </button>
+            </div>
+        </div>
 
         <footer id="footer">
             <span class="material-icons icon-btn" onclick="toggleEmoji()">sentiment_satisfied_alt</span>
@@ -720,6 +744,8 @@
             // because renderTagFilters() inside renderChatList() will do it.
         } catch(e) { console.error(e); }
     }
+
+
     // --- INITIALIZATION ---
     document.addEventListener("DOMContentLoaded", () => {
         msgInputEl = document.getElementById('msg-input');
@@ -937,6 +963,35 @@
             container.scrollTop = container.scrollHeight;
         }
         updateSessionTimer();
+
+
+        // 🟢 AUTOMATION PREVIEW (AFTER MESSAGES RENDER)
+
+        if (
+            lastMsg &&
+            lastMsg.sender === "customer" &&
+            lastMsg.message
+        ) {
+            fetch("/automation/preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message: lastMsg.message
+                })
+            })
+            .then(r => r.json())
+            .then(preview => {
+                if (preview && preview.intent) {
+                    showAutomationBanner(preview);
+                } else {
+                    hideAutomationBanner();
+                }
+            })
+            .catch(() => hideAutomationBanner());
+        } else {
+            hideAutomationBanner();
+        }
+
     }
 
     // ==========================================
@@ -1520,6 +1575,44 @@ document.addEventListener('contextmenu', function (e) {
     menu.style.top = e.pageY + 'px';
 });
 
+let currentAutomationIntent = null;
+
+function showAutomationBanner(preview) {
+    currentAutomationIntent = preview.intent;
+    document.getElementById("automation-text").innerText =
+        preview.preview_text || "";
+    document.getElementById("automation-banner").style.display = "block";
+}
+
+function hideAutomationBanner() {
+    currentAutomationIntent = null;
+    const b = document.getElementById("automation-banner");
+    if (b) b.style.display = "none";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    const sendBtn = document.getElementById("automation-send");
+    const ignoreBtn = document.getElementById("automation-ignore");
+
+    if (sendBtn) {
+        sendBtn.onclick = () => {
+            if (!currentAutomationIntent || !currentPhone) return;
+
+            fetch("/automation/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    phone: currentPhone,
+                    intent: currentAutomationIntent
+                })
+            }).then(() => hideAutomationBanner());
+        };
+    }
+
+    if (ignoreBtn) {
+        ignoreBtn.onclick = hideAutomationBanner;
+    }
+});
 
 </script>
 </body>
