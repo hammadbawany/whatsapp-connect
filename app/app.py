@@ -924,6 +924,35 @@ def send_text():
         "is_reply": bool(reply_to)
     })
 '''
+def send_text_via_meta(phone, text):
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": text}
+    }
+
+    print("\n" + "="*80)
+    print("SEND_TEXT → PAYLOAD")
+    print(payload)
+    print("="*80)
+
+    resp = requests.post(
+        f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages",
+        headers={
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        timeout=10
+    )
+
+    print("\n" + "="*80)
+    print("SEND_TEXT ← RESPONSE")
+    print(resp.text)
+    print("="*80)
+
+    return resp
 
 @app.route("/send_text", methods=["POST"])
 def send_text():
@@ -3743,15 +3772,8 @@ def automation_preview():
     return jsonify(preview or {})
 
 def send_text_internal(phone, text):
+    send_text_via_meta(phone, text)
 
-    resp = requests.post(
-        f"{APP_BASE_URL}/send_text",
-        json={
-            "phone": phone,
-            "text": text
-        },
-        timeout=15
-    )
 
     print("[AUTOMATION] send_text_internal →", resp.status_code, resp.text)
 
