@@ -3746,10 +3746,3 @@ def automation_preview():
 
 def send_text_internal(phone, text):
     send_text_via_meta_and_db(phone, text)
-
-
-
-    print("[AUTOMATION] send_text_internal →", resp.status_code, resp.text)
-
-    if resp.status_code != 200:
-        raise Exception("send_text_internal failed")
