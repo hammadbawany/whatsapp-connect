@@ -3743,11 +3743,8 @@ def automation_preview():
     return jsonify(preview or {})
 
 def send_text_internal(phone, text):
-    resp = requests.post(
-        f"{APP_BASE_URL}/send_text",
-        json={"phone": phone, "text": text},
-        timeout=10
-    )
+    # DIRECT CALL — NO HTTP
+    send_text_via_meta(phone, text)
     print("[AUTOMATION] send_text status:", resp.status_code, resp.text)
     if resp.status_code != 200:
         raise Exception("send_text failed")
