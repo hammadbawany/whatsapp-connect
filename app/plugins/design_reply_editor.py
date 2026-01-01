@@ -53,58 +53,43 @@ def detect_alignment_intent(text: str):
 # ------------------------------------------------
 # STEP 2 — FIND ORDER FOLDER
 # ------------------------------------------------
+def find_order_folder(dbx, phone: str, caption: str):
+    dlog("Searching order folder in Dropbox")
 
-def find_order_folder(phone: str, caption: str):
-    dlog(f"find_order_folder called")
-    dlog(f"phone={phone}")
-    dlog(f"caption='{caption}'")
-
-    order_match = re.search(r"\b\d{4,6}\b", caption or "")
-    order_code = order_match.group(0) if order_match else None
+    # Try extracting order code
+    match = re.search(r"\b\d{4,6}\b", caption)
+    order_code = match.group(0) if match else None
 
     dlog(f"Extracted order_code={order_code}")
 
-    if not os.path.exists(BASE_FOLDER):
-        dlog(f"❌ BASE_FOLDER does not exist: {BASE_FOLDER}")
-        return None
+    res = dbx.files_list_folder(DROPBOX_BASE_FOLDER)
 
-    for folder in os.listdir(BASE_FOLDER):
-        dlog(f"Checking folder: {folder}")
-
-        if phone not in folder:
+    for entry in res.entries:
+        if not entry.name.startswith(phone):
             continue
 
-        if order_code and order_code not in folder:
-            dlog(f"Skipping folder (order mismatch): {folder}")
+        if order_code and order_code not in entry.name:
             continue
 
-        matched = os.path.join(BASE_FOLDER, folder)
-        dlog(f"✅ Matched order folder: {matched}")
-        return matched
+        folder_path = f"{DROPBOX_BASE_FOLDER}/{entry.name}"
+        dlog(f"Matched Dropbox folder → {folder_path}")
+        return folder_path
 
-    dlog("❌ No matching order folder found")
     return None
 
 
-# ------------------------------------------------
-# STEP 3 — FIND SVG FILE
-# ------------------------------------------------
+# -----------------------------
+# STEP 3 — FIND SVG FILE (DROPBOX)
+# -----------------------------
+def find_svg_file(dbx, folder_path: str):
+    res = dbx.files_list_folder(folder_path)
 
-def find_svg_from_folder(folder_path: str):
-    dlog(f"find_svg_from_folder called: {folder_path}")
+    for entry in res.entries:
+        if entry.name.lower().endswith(".svg"):
+            svg_path = f"{folder_path}/{entry.name}"
+            dlog(f"Matched SVG → {svg_path}")
+            return svg_path
 
-    if not os.path.exists(folder_path):
-        dlog("❌ Folder path does not exist")
-        return None
-
-    for f in os.listdir(folder_path):
-        dlog(f"Found file in folder: {f}")
-
-        if f.lower().endswith(".svg"):
-            dlog(f"✅ SVG file selected: {f}")
-            return f
-
-    dlog("❌ No SVG file found in folder")
     return None
 
 
@@ -143,53 +128,38 @@ def handle_design_reply(
     reply_caption: str,
     reply_whatsapp_id: str
 ):
-    dlog("================================================")
+    dlog("==============================================")
     dlog("handle_design_reply STARTED")
-    dlog(f"phone={phone}")
-    dlog(f"customer_text='{customer_text}'")
-    dlog(f"reply_caption='{reply_caption}'")
-    dlog(f"reply_whatsapp_id={reply_whatsapp_id}")
 
-    # 1️⃣ Detect intent
     alignment = detect_alignment_intent(customer_text)
     if not alignment:
-        dlog("❌ EXIT: No alignment intent")
+        dlog("❌ No alignment intent")
         return False
 
-    # 2️⃣ Find order folder
-    folder = find_order_folder(phone, reply_caption)
+    dlog(f"Alignment intent → {alignment}")
+
+    dbx = get_system_dropbox_client()
+    if not dbx:
+        dlog("❌ Dropbox client not available")
+        return False
+
+    folder = find_order_folder(dbx, phone, reply_caption)
     if not folder:
-        dlog("❌ EXIT: Order folder not found")
+        dlog("❌ Order folder not found")
         return False
 
-    # 3️⃣ Find SVG
-    svg_file = find_svg_from_folder(folder)
-    if not svg_file:
-        dlog("❌ EXIT: SVG file not found")
+    svg_path = find_svg_file(dbx, folder)
+    if not svg_path:
+        dlog("❌ SVG file not found")
         return False
 
-    # 4️⃣ Build payload
-    payload = {
-        "order_phone": phone,
-        "folder_path": folder,
-        "svg_file": svg_file,
-        "action": {
-            "type": "move_text_alignment",
-            "target_text_id": "text2",
-            "alignment": alignment
-        },
-        "reply_whatsapp_id": reply_whatsapp_id
-    }
+    # 🚀 PHASE-1 OUTPUT (NO SVG EDIT HERE)
+    dlog("✅ READY FOR LIFAFAY SYSTEM")
+    dlog(f"SVG_PATH={svg_path}")
+    dlog(f"ACTION=move_text")
+    dlog(f"ALIGNMENT={alignment}")
 
-    # 5️⃣ Send to Lifafay
-    success = send_to_lifafay(payload)
+    # 🔜 NEXT PHASE:
+    # POST svg_path + alignment to Lifafay API
 
-    if success:
-        dlog("✅ Design edit request successfully sent to Lifafay")
-    else:
-        dlog("❌ Failed to send design edit request")
-
-    dlog("handle_design_reply FINISHED")
-    dlog("================================================")
-
-    return success
+    return True
