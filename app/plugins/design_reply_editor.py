@@ -1,127 +1,124 @@
-import os
 import re
 import sys
-import requests
+
 from app.plugins.dropbox_plugin import get_system_dropbox_client
 
-BASE_FOLDER = r"D:\Dropbox\1 daniyal\Auto\send to customer"
+# =========================================================
+# CONFIG
+# =========================================================
 
-# 🔗 Lifafay API (OTHER SERVER)
-LIFAFAY_API_URL = "https://lifafay.yourdomain.com/api/design/edit"
+# Dropbox base folder where designs live
+BASE_DROPBOX_FOLDER = "/1 daniyal/Auto/send to customer"
 
+# =========================================================
+# LOGGING
+# =========================================================
 
 def dlog(msg):
     print(f"[DESIGN-REPLY] {msg}", file=sys.stdout)
     sys.stdout.flush()
 
 
-# ------------------------------------------------
-# STEP 1 — DETECT ALIGNMENT INTENT
-# ------------------------------------------------
+# =========================================================
+# STEP 1 — DETECT ALIGNMENT INTENT (WHATSAPP SIDE ONLY)
+# =========================================================
 
 def detect_alignment_intent(text: str):
     dlog(f"detect_alignment_intent called with text='{text}'")
 
-    if not text:
-        dlog("❌ Empty text received")
-        return None
-
     t = text.lower()
 
-    if any(k in t for k in [
-        "center", "centre", "middle",
-        "beech", "center kar", "center karo"
-    ]):
+    if any(k in t for k in ["center", "centre", "beech", "center kar", "center karo"]):
         dlog("✅ Alignment detected: center")
         return "center"
 
-    if any(k in t for k in [
-        "right", "right side", "dayen"
-    ]):
+    if any(k in t for k in ["right", "right side", "dayen", "dayin"]):
         dlog("✅ Alignment detected: right")
         return "right"
 
-    if any(k in t for k in [
-        "left", "left side", "baen"
-    ]):
+    if any(k in t for k in ["left", "left side", "baen", "baein"]):
         dlog("✅ Alignment detected: left")
         return "left"
 
-    dlog("❌ No alignment keyword matched")
+    dlog("❌ No alignment intent detected")
     return None
 
 
-# ------------------------------------------------
-# STEP 2 — FIND ORDER FOLDER
-# ------------------------------------------------
-def find_order_folder(dbx, phone: str, caption: str):
-    dlog("Searching order folder in Dropbox")
+# =========================================================
+# STEP 2 — FIND ORDER FOLDER FROM DROPBOX
+# =========================================================
 
-    # Try extracting order code
-    match = re.search(r"\b\d{4,6}\b", caption)
-    order_code = match.group(0) if match else None
+def find_order_folder(dbx, phone: str, caption: str):
+    """
+    Folder format:
+    03247016673 --- 57388 --- 19764 -- website -- Mrs Ali -- Multan
+    """
+
+    dlog("find_order_folder called")
+    dlog(f"phone={phone}")
+    dlog(f"caption='{caption}'")
+
+    # Try extracting order code from caption (4–6 digits)
+    order_match = re.search(r"\b\d{4,6}\b", caption)
+    order_code = order_match.group(0) if order_match else None
 
     dlog(f"Extracted order_code={order_code}")
 
-    res = dbx.files_list_folder(DROPBOX_BASE_FOLDER)
+    try:
+        result = dbx.files_list_folder(BASE_DROPBOX_FOLDER)
+    except Exception as e:
+        dlog(f"❌ Dropbox list folder failed: {e}")
+        return None
 
-    for entry in res.entries:
-        if not entry.name.startswith(phone):
+    for entry in result.entries:
+        if entry.__class__.__name__ != "FolderMetadata":
             continue
 
-        if order_code and order_code not in entry.name:
+        folder_name = entry.name
+
+        if phone not in folder_name:
             continue
 
-        folder_path = f"{DROPBOX_BASE_FOLDER}/{entry.name}"
-        dlog(f"Matched Dropbox folder → {folder_path}")
-        return folder_path
+        if order_code and order_code not in folder_name:
+            continue
 
+        matched_path = f"{BASE_DROPBOX_FOLDER}/{folder_name}"
+        dlog(f"✅ Matched order folder: {matched_path}")
+        return matched_path
+
+    dlog("❌ No matching order folder found")
     return None
 
 
-# -----------------------------
-# STEP 3 — FIND SVG FILE (DROPBOX)
-# -----------------------------
-def find_svg_file(dbx, folder_path: str):
-    res = dbx.files_list_folder(folder_path)
+# =========================================================
+# STEP 3 — FIND SVG FILE INSIDE ORDER FOLDER
+# =========================================================
 
-    for entry in res.entries:
-        if entry.name.lower().endswith(".svg"):
-            svg_path = f"{folder_path}/{entry.name}"
-            dlog(f"Matched SVG → {svg_path}")
-            return svg_path
-
-    return None
-
-
-# ------------------------------------------------
-# STEP 4 — CALL LIFAFAY SYSTEM
-# ------------------------------------------------
-
-def send_to_lifafay(payload: dict):
-    dlog("Sending payload to Lifafay system")
-    dlog(f"Payload → {payload}")
+def find_svg_from_folder(dbx, folder_path: str):
+    dlog(f"find_svg_from_folder called for {folder_path}")
 
     try:
-        resp = requests.post(
-            LIFAFAY_API_URL,
-            json=payload,
-            timeout=20
-        )
-
-        dlog(f"Lifafay HTTP status → {resp.status_code}")
-        dlog(f"Lifafay response body → {resp.text}")
-
-        return resp.ok
-
+        result = dbx.files_list_folder(folder_path)
     except Exception as e:
-        dlog(f"❌ Lifafay request failed: {e}")
-        return False
+        dlog(f"❌ Failed to list folder {folder_path}: {e}")
+        return None
+
+    for entry in result.entries:
+        if entry.__class__.__name__ != "FileMetadata":
+            continue
+
+        if entry.name.lower().endswith(".svg"):
+            svg_path = f"{folder_path}/{entry.name}"
+            dlog(f"✅ SVG found: {svg_path}")
+            return svg_path
+
+    dlog("❌ No SVG file found in folder")
+    return None
 
 
-# ------------------------------------------------
-# MAIN ENTRY — PHASE 1
-# ------------------------------------------------
+# =========================================================
+# MAIN ENTRY — PHASE 1 ONLY (NO SVG EDITING HERE)
+# =========================================================
 
 def handle_design_reply(
     phone: str,
@@ -131,36 +128,53 @@ def handle_design_reply(
 ):
     dlog("==============================================")
     dlog("handle_design_reply STARTED")
+    dlog(f"phone={phone}")
+    dlog(f"customer_text='{customer_text}'")
+    dlog(f"reply_caption='{reply_caption}'")
+    dlog(f"reply_whatsapp_id={reply_whatsapp_id}")
 
+    # 1️⃣ Detect alignment intent
     alignment = detect_alignment_intent(customer_text)
     if not alignment:
-        dlog("❌ No alignment intent")
+        dlog("❌ EXIT: No alignment intent")
         return False
 
     dlog(f"Alignment intent → {alignment}")
 
+    # 2️⃣ Get Dropbox client (EXISTING AUTH)
     dbx = get_system_dropbox_client()
     if not dbx:
-        dlog("❌ Dropbox client not available")
+        dlog("❌ EXIT: Dropbox client not available")
         return False
 
-    folder = find_order_folder(dbx, phone, reply_caption)
-    if not folder:
-        dlog("❌ Order folder not found")
+    # 3️⃣ Find order folder
+    folder_path = find_order_folder(dbx, phone, reply_caption)
+    if not folder_path:
+        dlog("❌ EXIT: Order folder not found")
         return False
 
-    svg_path = find_svg_file(dbx, folder)
+    # 4️⃣ Find SVG file
+    svg_path = find_svg_from_folder(dbx, folder_path)
     if not svg_path:
-        dlog("❌ SVG file not found")
+        dlog("❌ EXIT: SVG not found")
         return False
 
-    # 🚀 PHASE-1 OUTPUT (NO SVG EDIT HERE)
-    dlog("✅ READY FOR LIFAFAY SYSTEM")
-    dlog(f"SVG_PATH={svg_path}")
-    dlog(f"ACTION=move_text")
-    dlog(f"ALIGNMENT={alignment}")
+    # =====================================================
+    # 🚀 PHASE 1 COMPLETE (HANDOFF POINT)
+    # =====================================================
+    # At this point we ONLY prepare data.
+    # Actual SVG editing will be done by Lifafay system
+    # via API in Phase 2.
 
-    # 🔜 NEXT PHASE:
-    # POST svg_path + alignment to Lifafay API
+    dlog("✅ PHASE 1 SUCCESS")
+    dlog(f"READY FOR LIFAFAY → folder={folder_path}")
+    dlog(f"READY FOR LIFAFAY → svg={svg_path}")
+    dlog(f"READY FOR LIFAFAY → action=move_text")
+    dlog(f"READY FOR LIFAFAY → alignment={alignment}")
 
-    return True
+    return {
+        "folder_path": folder_path,
+        "svg_path": svg_path,
+        "action": "move_text",
+        "alignment": alignment
+    }
