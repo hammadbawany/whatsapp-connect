@@ -671,7 +671,7 @@
     <div class="menu-divider"></div>
 
     <div class="menu-item" data-action="delete-me">Delete for me</div>
-    <div class="menu-item danger" data-action="delete-everyone">Delete for everyone</div>
+    /*<div class="menu-item danger" data-action="delete-everyone">Delete for everyone</div>*/
 </div>
 
 <div class="modal-overlay" id="tag-modal">
@@ -1238,7 +1238,7 @@
     // --- UPLOADS ---
     function toggleAttach() { if (!isSessionActive()) { alert("Session expired."); return; } const m = document.getElementById('attach-menu'); m.style.display = m.style.display === 'flex' ? 'none' : 'flex'; }
     function triggerUpload(t) { toggleAttach(); const i=document.getElementById('hidden-file-input'); i.accept=t==='image'?'image/*,video/*':'*/*'; i.onchange=(e)=>prepareUpload(e.target.files[0],t); i.click(); }
-    function prepareUpload(f,t) { if(!f)return; pendingFile=f; pendingFileType=f.type.startsWith('image')?'image':(f.type.startsWith('video')?'video':'document'); const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=''; if(pendingFileType==='image'){ const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img); } else if(pendingFileType==='video'){ const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v); } else { c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`; } document.getElementById('preview-modal').style.display='grid'; }
+    function prepareUpload(f,t) { if(!f)return; pendingFile=f; pendingFileType=f.type.startsWith('image')?'image':(f.type.startsWith('video')?'video':'document'); const c=document.getElementById('preview-container'); c.innerHTML=''; document.getElementById('preview-filename').innerText=f.name; document.getElementById('file-caption').value=f.name; if(pendingFileType==='image'){ const img=document.createElement('img');img.id='preview-img';img.src=URL.createObjectURL(f);c.appendChild(img); } else if(pendingFileType==='video'){ const v=document.createElement('video');v.id='preview-video';v.controls=true;v.src=URL.createObjectURL(f);c.appendChild(v); } else { c.innerHTML=`<span class="material-icons" style="font-size:48px;">description</span>`; } document.getElementById('preview-modal').style.display='grid'; }
     function cancelUpload() { document.getElementById('preview-modal').style.display='none'; pendingFile=null; }
     function toggleEmoji() { document.querySelector('emoji-picker').style.display = document.querySelector('emoji-picker').style.display === 'flex' ? 'none' : 'flex'; }
 
