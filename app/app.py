@@ -32,6 +32,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.plugins.auto_design_sender import run_scheduled_automation
 from app.plugins.voice_bot import voice_bp  # <--- IMPORT
 from app.plugins.automations import run_automations
+from app.plugins.design_reply_editor import handle_design_reply
 
 import socket
 import atexit
@@ -421,6 +422,36 @@ def webhook():
                         ))
 
                         conn.commit()  # 🔥 MUST COMMIT FIRST
+                        # 🔹 DESIGN REPLY HANDLER (PHASE 1)
+                        if context_whatsapp_id:
+                            log("🎯 DESIGN REPLY FLOW ENTERED", context_whatsapp_id)
+
+                            cur.execute("""
+                                SELECT message
+                                FROM messages
+                                WHERE whatsapp_id = %s
+                                  AND sender = 'agent'
+                            """, (context_whatsapp_id,))
+                            row = cur.fetchone()
+
+                            log("🎯 REPLIED-TO AGENT MESSAGE", row)
+
+                            if row:
+                                from app.plugins.design_reply_handler import handle_design_reply
+
+                                handled = handle_design_reply(
+                                    phone=phone,
+                                    customer_text=text,
+                                    reply_caption=row["message"],
+                                    reply_whatsapp_id=context_whatsapp_id
+                                )
+
+                                log("🎯 DESIGN HANDLER RESULT", handled)
+
+                                if handled:
+                                    log("🛑 STOPPING — design reply handled, skipping automation")
+                                    conn.commit()
+                                    return "OK", 200   # ⛔ THIS LINE IS THE FIX
 
                         # 🔥 BACKGROUND AUTOMATION (CORRECT)
                         run_automations(

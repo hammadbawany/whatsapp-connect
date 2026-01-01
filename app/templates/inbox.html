@@ -1038,6 +1038,9 @@
         if (!isSessionActive()) { alert("Session expired."); cancelUpload(); return; }
         if (!pendingFile) return;
 
+        // Stop the background loop to prevent conflicts during upload
+        if (chatLoopTimer) clearTimeout(chatLoopTimer);
+
         const cap = document.getElementById('file-caption').value;
         const fd = new FormData();
         fd.append('phone', currentPhone);
@@ -1063,8 +1066,10 @@
             isSending = false;
             lastRenderChecksum = "";
             await refreshChat(true);
+            chatLoop(); // Restart the background loop
         }
     }
+
 
     // ==========================================
     // 4. HELPERS
