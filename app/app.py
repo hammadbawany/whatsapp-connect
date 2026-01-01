@@ -437,7 +437,7 @@ def webhook():
                             log("🎯 REPLIED-TO AGENT MESSAGE", row)
 
                             if row:
-                                from app.plugins.design_reply_handler import handle_design_reply
+                                from app.plugins.design_reply_editor import handle_design_reply
 
                                 handled = handle_design_reply(
                                     phone=phone,
