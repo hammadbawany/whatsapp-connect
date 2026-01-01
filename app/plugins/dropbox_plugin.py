@@ -690,3 +690,28 @@ def auto_correction_status():
         no_chat_count=len(no_chat_list),
         unparsed_count=len(unparsed_list)
     )
+
+# ==========================================
+# SYSTEM DROPBOX CLIENT (FOR AUTOMATIONS)
+# ==========================================
+
+def get_system_dropbox_client():
+    """
+    Returns a Dropbox client using SYSTEM access token.
+    Used by WhatsApp automations & background jobs.
+    """
+
+    SYSTEM_DROPBOX_TOKEN = os.getenv("SYSTEM_DROPBOX_TOKEN")
+
+    if not SYSTEM_DROPBOX_TOKEN:
+        raise Exception("SYSTEM_DROPBOX_TOKEN env variable is missing")
+
+    dbx = dropbox.Dropbox(SYSTEM_DROPBOX_TOKEN)
+
+    # Optional sanity check
+    try:
+        dbx.users_get_current_account()
+    except Exception as e:
+        raise Exception(f"System Dropbox auth failed: {e}")
+
+    return dbx

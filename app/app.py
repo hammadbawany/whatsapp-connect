@@ -33,6 +33,7 @@ from app.plugins.auto_design_sender import run_scheduled_automation
 from app.plugins.voice_bot import voice_bp  # <--- IMPORT
 from app.plugins.automations import run_automations
 from app.plugins.design_reply_editor import handle_design_reply
+from app.plugins.dropbox_plugin import get_system_dropbox_client
 
 import socket
 import atexit

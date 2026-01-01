@@ -7,7 +7,6 @@ BASE_FOLDER = r"D:\Dropbox\1 daniyal\Auto\send to customer"
 
 # 🔗 Lifafay API (OTHER SERVER)
 LIFAFAY_API_URL = "https://lifafay.yourdomain.com/api/design/edit"
-from app.plugins.dropbox_plugin import get_system_dropbox_client
 
 
 def dlog(msg):
