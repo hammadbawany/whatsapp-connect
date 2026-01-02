@@ -78,29 +78,29 @@ def gpt_intent_detect(text: str):
         return None
 
     system_prompt = """
-You are an intent classifier for customer support chats.
+    You are an intent classifier for customer support chats.
 
-Rules:
-- Only return valid JSON
-- Only choose from the provided intents
-- If unsure, return intent=null
-- Be conservative
-"""
+    Rules:
+    - Only return valid JSON
+    - Only choose from the provided intents
+    - If unsure, return intent=null
+    - Be conservative
+    """
 
     intents_list = "\n".join(
         [f"- {k}: {v['description']}" for k, v in AUTOMATION_RULES.items()]
     )
 
     user_prompt = f"""
-Message:
-"{text}"
+    Message:
+    "{text}"
 
-Available intents:
-{intents_list}
+    Available intents:
+    {intents_list}
 
-Return JSON:
-{{ "intent": string|null, "confidence": number }}
-"""
+    Return JSON:
+    {{ "intent": string|null, "confidence": number }}
+    """
 
     try:
         resp = client.chat.completions.create(
@@ -113,11 +113,51 @@ Return JSON:
             max_tokens=60
         )
 
-        return json.loads(resp.choices[0].message.content)
+        content = resp.choices[0].message.content
+        data = json.loads(content)
+
+        # 🔹 GPT LOGGING (SAFE, NON-BLOCKING)
+        try:
+            usage = resp.usage or {}
+
+            from app.app import get_conn
+            conn = get_conn()
+            cur = conn.cursor()
+
+            cur.execute("""
+                INSERT INTO gpt_logs (
+                    phone,
+                    message,
+                    intent,
+                    confidence,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                None,  # phone not known here
+                text,
+                data.get("intent"),
+                data.get("confidence"),
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens")
+            ))
+
+            conn.commit()
+            cur.close()
+            conn.close()
+
+        except Exception as e:
+            alog(f"GPT LOGGING FAILED: {e}")
+
+        return data
 
     except Exception as e:
-        alog(f"GPT ERROR: {e}")
+        alog(f"GPT CALL FAILED: {e}")
         return None
+
 
 # =========================
 # SINGLE SOURCE OF TRUTH

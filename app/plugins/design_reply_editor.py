@@ -49,20 +49,9 @@ def detect_alignment_intent(text: str):
 # =========================================================
 
 def find_order_folder(dbx, phone: str, caption: str):
-    """
-    Folder format:
-    03247016673 --- 57388 --- 19764 -- website -- Mrs Ali -- Multan
-    """
-
     dlog("find_order_folder called")
     dlog(f"phone={phone}")
     dlog(f"caption='{caption}'")
-
-    # Try extracting order code from caption (4–6 digits)
-    order_match = re.search(r"\b\d{4,6}\b", caption)
-    order_code = order_match.group(0) if order_match else None
-
-    dlog(f"Extracted order_code={order_code}")
 
     try:
         result = dbx.files_list_folder(BASE_DROPBOX_FOLDER)
@@ -70,23 +59,31 @@ def find_order_folder(dbx, phone: str, caption: str):
         dlog(f"❌ Dropbox list folder failed: {e}")
         return None
 
+    matched_folders = []
+
     for entry in result.entries:
         if entry.__class__.__name__ != "FolderMetadata":
             continue
 
         folder_name = entry.name
 
-        if phone not in folder_name:
-            continue
+        if phone in folder_name:
+            matched_folders.append(folder_name)
 
-        if order_code and order_code not in folder_name:
-            continue
+    dlog(f"Matched folders count = {len(matched_folders)}")
+    dlog(f"Matched folders = {matched_folders}")
 
-        matched_path = f"{BASE_DROPBOX_FOLDER}/{folder_name}"
-        dlog(f"✅ Matched order folder: {matched_path}")
-        return matched_path
+    # ✅ Phase-1 rule: only proceed if exactly ONE folder
+    if len(matched_folders) == 1:
+        final_path = f"{BASE_DROPBOX_FOLDER}/{matched_folders[0]}"
+        dlog(f"✅ Using folder: {final_path}")
+        return final_path
 
-    dlog("❌ No matching order folder found")
+    if len(matched_folders) == 0:
+        dlog("❌ No folder found for this phone")
+        return None
+
+    dlog("⚠️ Multiple folders found — ambiguous (Phase-2 case)")
     return None
 
 
@@ -172,9 +169,34 @@ def handle_design_reply(
     dlog(f"READY FOR LIFAFAY → action=move_text")
     dlog(f"READY FOR LIFAFAY → alignment={alignment}")
 
-    return {
-        "folder_path": folder_path,
-        "svg_path": svg_path,
-        "action": "move_text",
-        "alignment": alignment
+    payload = {
+    "folder_path": folder_path,
+    "svg_path": svg_path,
+    "action": "move_text",
+    "alignment": alignment,
+    "source": "whatsapp",
+    "phone": phone,
+    "reply_whatsapp_id": reply_whatsapp_id
     }
+
+    dlog("📤 Sending payload to Lifafay")
+    dlog(payload)
+
+    try:
+        import requests
+        LIFAFAY_ENDPOINT = os.getenv("LIFAFAY_EDIT_ENDPOINT")
+
+        resp = requests.post(
+            LIFAFAY_ENDPOINT,
+            json=payload,
+            timeout=20
+        )
+
+        dlog(f"📥 Lifafay response status={resp.status_code}")
+        dlog(resp.text)
+
+        return True
+
+    except Exception as e:
+        dlog(f"❌ Lifafay call failed: {e}")
+        return False
