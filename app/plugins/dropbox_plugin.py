@@ -12,6 +12,7 @@ import mimetypes
 from werkzeug.utils import secure_filename
 import psycopg2
 from psycopg2.extras import DictCursor
+
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
 APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
@@ -697,18 +698,36 @@ def auto_correction_status():
 
 def get_system_dropbox_client():
     """
-    Returns a Dropbox client using SYSTEM access token.
-    Used by WhatsApp automations & background jobs.
+    Returns a Dropbox client using SYSTEM credentials.
+    Priority 1: SYSTEM_REFRESH_TOKEN (Correct method, handles auto-refresh)
+    Priority 2: SYSTEM_DROPBOX_TOKEN (Old method, manual update required)
     """
 
-    SYSTEM_DROPBOX_TOKEN = os.getenv("SYSTEM_DROPBOX_TOKEN")
+    # 1. Preferred: Refresh Token Flow (Never expires if used regularly)
+    refresh_token = os.getenv("SYSTEM_REFRESH_TOKEN")
 
-    if not SYSTEM_DROPBOX_TOKEN:
-        raise Exception("SYSTEM_DROPBOX_TOKEN env variable is missing")
+    if refresh_token and APP_KEY and APP_SECRET:
+        try:
+            # Dropbox SDK handles the refresh logic automatically
+            dbx = dropbox.Dropbox(
+                oauth2_refresh_token=refresh_token,
+                app_key=APP_KEY,
+                app_secret=APP_SECRET
+            )
+            # Verify connectivity
+            dbx.users_get_current_account()
+            return dbx
+        except Exception as e:
+            print(f"[SYSTEM DBX] ⚠️ Auto-refresh failed: {e}. Falling back to static token.")
 
-    dbx = dropbox.Dropbox(SYSTEM_DROPBOX_TOKEN)
+    # 2. Fallback: Static Access Token
+    access_token = os.getenv("SYSTEM_DROPBOX_TOKEN")
 
-    # Optional sanity check
+    if not access_token:
+        raise Exception("Missing Dropbox Credentials! Please set SYSTEM_REFRESH_TOKEN in Heroku Config Vars.")
+
+    dbx = dropbox.Dropbox(access_token)
+
     try:
         dbx.users_get_current_account()
     except Exception as e:
