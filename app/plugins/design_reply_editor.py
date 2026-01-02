@@ -12,7 +12,7 @@ from app.plugins.dropbox_plugin import get_system_dropbox_client
 
 BASE_DROPBOX_FOLDER = "/1 daniyal/Auto/send to customer"
 
-LIFAFAY_ENDPOINT = "https://lifafay.herokuapp.com/api/whatsapp/design-action"  # 🔁 CHANGE IF NEEDED
+LIFAFAY_ENDPOINT = "https://lifafay.herokuapp.com/api/design/action"  # 🔁 CHANGE IF NEEDED
 LIFAFAY_API_KEY = None  # optional, if you want auth later
 
 
