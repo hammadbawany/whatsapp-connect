@@ -1680,12 +1680,13 @@ def send_attachment():
         phone = normalize_phone(request.form.get("phone"))
         caption = request.form.get("caption", "")
         file = request.files.get("file")
+        # Frontend might send "voice", "audio", "image", etc.
         msg_type = request.form.get("type", "image")
 
         if not phone or not file:
             return jsonify({"error": "missing data"}), 400
 
-        # 1️⃣ Get WhatsApp account (UNCHANGED LOGIC)
+        # 1️⃣ Get WhatsApp account
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -1722,26 +1723,26 @@ def send_attachment():
         print("Type:", msg_type)
         print("Size:", len(file_bytes))
 
-        # 3️⃣ Build upload files (AUDIO vs NON-AUDIO)
+        # 3️⃣ Build upload files
         ogg_bytes = None
         audio_kind = None
 
-        if msg_type == "audio":
-            # Convert webm → ogg (your existing function)
+        # 🔥 FIX: Check for both 'audio' and 'voice'
+        if msg_type in ["audio", "voice"]:
+            # Convert webm → ogg
             ogg_bytes, duration = convert_webm_to_ogg(file_bytes)
             audio_kind = detect_voice_or_audio(duration)
 
             files = {
                 "file": ("voice.ogg", ogg_bytes, "audio/ogg; codecs=opus")
             }
-            caption = ""  # WhatsApp does not allow captions on voice
+            caption = ""  # WhatsApp does not allow captions on audio/voice
         else:
-            # 🔴 THIS WAS MISSING → restores image/video/document support
             files = {
                 "file": (file.filename, file_bytes, file.mimetype)
             }
 
-        # 4️⃣ Upload media to Meta (COMMON PATH)
+        # 4️⃣ Upload media to Meta
         upload_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/media"
         headers = {"Authorization": f"Bearer {acc['access_token']}"}
 
@@ -1758,33 +1759,34 @@ def send_attachment():
         if not media_id:
             return jsonify({"error": "Media upload failed", "meta": up_resp}), 500
 
-        # 5️⃣ Small delay for audio indexing ONLY
-        if msg_type == "audio":
+        # 5️⃣ Small delay for audio indexing
+        if msg_type in ["audio", "voice"]:
             time.sleep(1.0)
 
-        # 6️⃣ Build send payload (FULL FEATURE SET)
+        # 6️⃣ Build send payload
+        # 🔥 FIX: WhatsApp API for SENDING only understands 'audio', 'image', 'video', 'document'.
+        # It does not accept 'voice' as a top-level type for sending (only receiving).
+        api_type = "audio" if msg_type == "voice" else msg_type
+
         send_payload = {
             "messaging_product": "whatsapp",
             "to": phone,
-            "type": msg_type,
+            "type": api_type,
         }
 
-        if msg_type == "audio":
-            # ✅ iOS-safe behavior: send as normal audio (no voice flag)
-            # This preserves reliability across all platforms
+        if api_type == "audio":
             send_payload["audio"] = {
                 "id": media_id
             }
+            # Note: Do not send "caption" for audio
         else:
-            send_payload[msg_type] = {"id": media_id}
-
-        # Caption logic (same as old code)
-        if caption and msg_type in ["image", "video", "document"]:
-            send_payload[msg_type]["caption"] = caption
+            send_payload[api_type] = {"id": media_id}
+            if caption:
+                send_payload[api_type]["caption"] = caption
 
         print("🚀 FINAL SEND PAYLOAD:", send_payload)
 
-        # 7️⃣ Send message (ONCE ONLY)
+        # 7️⃣ Send message
         send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
         send_resp = requests.post(
             send_url,
@@ -1801,7 +1803,11 @@ def send_attachment():
         if not wa_id:
             print("[WARN] WhatsApp message id missing", send_resp)
 
-        # 8️⃣ Save message to DB (UNCHANGED SCHEMA)
+        # 8️⃣ Save message to DB
+        # We can save it as 'voice' in our DB if we want, or 'audio'.
+        # Using 'voice' allows the frontend to show the audio player.
+        db_type = "voice" if msg_type == "voice" else msg_type
+
         conn = get_conn()
         cur = conn.cursor()
 
@@ -1821,7 +1827,7 @@ def send_attachment():
         """, (
             acc["id"],
             phone,
-            msg_type,
+            db_type,  # Saving as 'voice' or 'audio' or 'image'
             media_id,
             caption,
             wa_id
@@ -1831,8 +1837,8 @@ def send_attachment():
         cur.close()
         conn.close()
 
-        # 9️⃣ 🔵 Non-blocking R2 upload (AUDIO ONLY)
-        if msg_type == "audio" and ogg_bytes:
+        # 9️⃣ 🔵 Non-blocking R2 upload (AUDIO/VOICE ONLY)
+        if (msg_type in ["audio", "voice"]) and ogg_bytes:
             try:
                 print(f"[R2] Upload via Worker media_id={media_id}")
                 r2_key = upload_audio_via_worker(media_id, ogg_bytes)
@@ -2759,6 +2765,59 @@ def unread_counts():
 
 
 def convert_webm_to_ogg(webm_bytes):
+    # 1. Write temp file (Close it so FFmpeg can read it on Windows)
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inp:
+        inp.write(webm_bytes)
+        inp_path = inp.name
+    # File is closed here automatically upon exiting the 'with' block
+
+    out_path = inp_path.replace(".webm", ".ogg")
+    duration = 0.0
+
+    try:
+        # 2. Run FFmpeg with capture_output=True to read the logs
+        process = subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-i", inp_path,
+            "-vn",
+            "-map_metadata", "-1",
+            "-ac", "1",
+            "-ar", "48000",              # 🔥 KEEP: Required for iOS
+            "-c:a", "libopus",
+            "-b:a", "24k",               # 🔥 KEEP: Good quality/size balance
+            "-application", "voip",
+            "-frame_duration", "20",     # 🔥 KEEP: Required for iOS
+            "-packet_loss", "5",
+            out_path
+        ], capture_output=True, text=True, check=True)
+
+        # 3. Parse Duration from FFmpeg stderr
+        # Output looks like: "Duration: 00:00:03.66, ..."
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", process.stderr)
+        if match:
+            hours, minutes, seconds = match.groups()
+            duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+        # 4. Read the converted file
+        with open(out_path, "rb") as f:
+            ogg_bytes = f.read()
+
+        # 5. Return BOTH values
+        return ogg_bytes, duration
+
+    except subprocess.CalledProcessError as e:
+        print("❌ FFmpeg Error:", e.stderr)
+        raise e
+    finally:
+        # 6. Cleanup
+        if os.path.exists(inp_path):
+            os.unlink(inp_path)
+        if os.path.exists(out_path):
+            os.unlink(out_path)
+
+'''
+def convert_webm_to_ogg(webm_bytes):
     import subprocess, tempfile, os
 
     with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inp:
@@ -2790,7 +2849,7 @@ def convert_webm_to_ogg(webm_bytes):
     os.unlink(out_path)
 
     return ogg_bytes
-
+'''
 @app.route("/admin/upload_media/<media_id>")
 def upload_media_to_r2(media_id):
     print("🔥UPLOAD ROUTE FILE LOADED🔥🔥🔥 ")

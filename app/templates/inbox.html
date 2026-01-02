@@ -595,10 +595,10 @@
             <span class="material-icons icon-btn" id="send-btn" onclick="sendMessage()" style="display:none;">send</span>
             <span class="material-icons icon-btn" id="mic-btn" onclick="startRecording()">mic</span>
             <div id="recording-ui">
-       <div class="rec-dot"></div><span id="rec-timer">0:00</span>
-       <span class="material-icons icon-btn" style="color:red; margin-left:auto;" onclick="stopRecording(false)">delete</span>
-       <span class="material-icons icon-btn" style="color:var(--accent);" onclick="stopRecording(true)">send</span>
-   </div>
+                <div class="rec-dot"></div><span id="rec-timer">0:00</span>
+                <span class="material-icons icon-btn" style="color:red;" onclick="stopRecording(false)">delete</span>
+                <span class="material-icons icon-btn" style="color:var(--accent);" onclick="stopRecording(true)">send</span>
+            </div>
         <emoji-picker></emoji-picker>
             <div class="attach-menu" id="attach-menu">
                 <div class="attach-opt" onclick="triggerUpload('image')"><span class="material-icons" style="color:#d3396d;">image</span> Photos & Videos</div>

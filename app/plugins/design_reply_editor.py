@@ -1,42 +1,84 @@
 import re
 import sys
+import json
+import requests
 
 from app.plugins.dropbox_plugin import get_system_dropbox_client
 
-# =========================================================
-# CONFIG
-# =========================================================
 
-# Dropbox base folder where designs live
+# =====================================================
+# CONFIG
+# =====================================================
+
 BASE_DROPBOX_FOLDER = "/1 daniyal/Auto/send to customer"
 
-# =========================================================
+LIFAFAY_ENDPOINT = "https://lifafay.herokuapp.com/api/whatsapp/design-action"  # 🔁 CHANGE IF NEEDED
+LIFAFAY_API_KEY = None  # optional, if you want auth later
+
+
+# =====================================================
 # LOGGING
-# =========================================================
+# =====================================================
 
 def dlog(msg):
     print(f"[DESIGN-REPLY] {msg}", file=sys.stdout)
     sys.stdout.flush()
 
 
-# =========================================================
-# STEP 1 — DETECT ALIGNMENT INTENT (WHATSAPP SIDE ONLY)
-# =========================================================
+# =====================================================
+# HELPERS — PHONE NORMALIZATION
+# =====================================================
+
+def normalize_digits(s: str):
+    if not s:
+        return ""
+    return re.sub(r"\D", "", s)
+
+
+def matches_phone(folder_name: str, phone: str):
+    """
+    Matches phone against folder name.
+    Supports:
+    - +923...
+    - 923...
+    - 03...
+    - multiple numbers in folder
+    """
+    folder_normalized = normalize_digits(folder_name)
+
+    if not folder_normalized or not phone:
+        return False
+
+    # last 10 digits are usually stable
+    phone_tail = phone[-10:]
+
+    return phone_tail in folder_normalized
+
+
+# =====================================================
+# STEP 1 — ALIGNMENT INTENT (PHASE 1 ONLY)
+# =====================================================
 
 def detect_alignment_intent(text: str):
     dlog(f"detect_alignment_intent called with text='{text}'")
 
     t = text.lower()
 
-    if any(k in t for k in ["center", "centre", "beech", "center kar", "center karo"]):
+    if any(k in t for k in [
+        "center", "centre", "beech", "center kar", "center karo"
+    ]):
         dlog("✅ Alignment detected: center")
         return "center"
 
-    if any(k in t for k in ["right", "right side", "dayen", "dayin"]):
+    if any(k in t for k in [
+        "right", "dayen", "right side"
+    ]):
         dlog("✅ Alignment detected: right")
         return "right"
 
-    if any(k in t for k in ["left", "left side", "baen", "baein"]):
+    if any(k in t for k in [
+        "left", "baen", "left side"
+    ]):
         dlog("✅ Alignment detected: left")
         return "left"
 
@@ -44,78 +86,90 @@ def detect_alignment_intent(text: str):
     return None
 
 
-# =========================================================
-# STEP 2 — FIND ORDER FOLDER FROM DROPBOX
-# =========================================================
+# =====================================================
+# STEP 2 — FIND ORDER FOLDER (DROPBOX)
+# =====================================================
 
-def find_order_folder(dbx, phone: str, caption: str):
-    dlog("find_order_folder called")
+def find_order_folder_by_phone(dbx, base_folder: str, phone: str):
+    dlog("find_order_folder_by_phone called")
     dlog(f"phone={phone}")
-    dlog(f"caption='{caption}'")
+
+    phone_norm = normalize_digits(phone)
+    dlog(f"normalized phone={phone_norm}")
+
+    matches = []
 
     try:
-        result = dbx.files_list_folder(BASE_DROPBOX_FOLDER)
+        result = dbx.files_list_folder(base_folder)
+        entries = result.entries
+
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            entries.extend(result.entries)
+
     except Exception as e:
-        dlog(f"❌ Dropbox list folder failed: {e}")
+        dlog(f"❌ Dropbox list failed: {e}")
         return None
 
-    matched_folders = []
-
-    for entry in result.entries:
+    for entry in entries:
         if entry.__class__.__name__ != "FolderMetadata":
             continue
 
         folder_name = entry.name
 
-        if phone in folder_name:
-            matched_folders.append(folder_name)
+        if matches_phone(folder_name, phone_norm):
+            matches.append(entry.path_lower)
 
-    dlog(f"Matched folders count = {len(matched_folders)}")
-    dlog(f"Matched folders = {matched_folders}")
+    dlog(f"Matched folders count = {len(matches)}")
+    dlog(f"Matched folders = {matches}")
 
-    # ✅ Phase-1 rule: only proceed if exactly ONE folder
-    if len(matched_folders) == 1:
-        final_path = f"{BASE_DROPBOX_FOLDER}/{matched_folders[0]}"
-        dlog(f"✅ Using folder: {final_path}")
-        return final_path
-
-    if len(matched_folders) == 0:
+    if not matches:
         dlog("❌ No folder found for this phone")
         return None
 
-    dlog("⚠️ Multiple folders found — ambiguous (Phase-2 case)")
-    return None
+    if len(matches) == 1:
+        return matches[0]
+
+    # Prefer exact phone match if multiple
+    for m in matches:
+        if phone_norm in normalize_digits(m):
+            return m
+
+    matches.sort()
+    return matches[0]
 
 
-# =========================================================
-# STEP 3 — FIND SVG FILE INSIDE ORDER FOLDER
-# =========================================================
+# =====================================================
+# STEP 3 — FIND SVG FILE (DROPBOX)
+# =====================================================
 
 def find_svg_from_folder(dbx, folder_path: str):
     dlog(f"find_svg_from_folder called for {folder_path}")
 
     try:
         result = dbx.files_list_folder(folder_path)
+        entries = result.entries
+
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            entries.extend(result.entries)
+
     except Exception as e:
-        dlog(f"❌ Failed to list folder {folder_path}: {e}")
+        dlog(f"❌ Dropbox list SVG failed: {e}")
         return None
 
-    for entry in result.entries:
-        if entry.__class__.__name__ != "FileMetadata":
-            continue
-
-        if entry.name.lower().endswith(".svg"):
-            svg_path = f"{folder_path}/{entry.name}"
-            dlog(f"✅ SVG found: {svg_path}")
-            return svg_path
+    for entry in entries:
+        if entry.__class__.__name__ == "FileMetadata" and entry.name.lower().endswith(".svg"):
+            dlog(f"✅ SVG found: {entry.path_lower}")
+            return entry.path_lower
 
     dlog("❌ No SVG file found in folder")
     return None
 
 
-# =========================================================
-# MAIN ENTRY — PHASE 1 ONLY (NO SVG EDITING HERE)
-# =========================================================
+# =====================================================
+# MAIN ENTRY — PHASE 1
+# =====================================================
 
 def handle_design_reply(
     phone: str,
@@ -130,7 +184,7 @@ def handle_design_reply(
     dlog(f"reply_caption='{reply_caption}'")
     dlog(f"reply_whatsapp_id={reply_whatsapp_id}")
 
-    # 1️⃣ Detect alignment intent
+    # STEP 1 — intent
     alignment = detect_alignment_intent(customer_text)
     if not alignment:
         dlog("❌ EXIT: No alignment intent")
@@ -138,65 +192,59 @@ def handle_design_reply(
 
     dlog(f"Alignment intent → {alignment}")
 
-    # 2️⃣ Get Dropbox client (EXISTING AUTH)
+    # STEP 2 — Dropbox client
     dbx = get_system_dropbox_client()
-    if not dbx:
-        dlog("❌ EXIT: Dropbox client not available")
-        return False
 
-    # 3️⃣ Find order folder
-    folder_path = find_order_folder(dbx, phone, reply_caption)
+    # STEP 3 — find folder
+    folder_path = find_order_folder_by_phone(
+        dbx=dbx,
+        base_folder=BASE_DROPBOX_FOLDER,
+        phone=phone
+    )
+
     if not folder_path:
         dlog("❌ EXIT: Order folder not found")
         return False
 
-    # 4️⃣ Find SVG file
+    dlog(f"Matched folder → {folder_path}")
+
+    # STEP 4 — find SVG
     svg_path = find_svg_from_folder(dbx, folder_path)
     if not svg_path:
         dlog("❌ EXIT: SVG not found")
         return False
 
-    # =====================================================
-    # 🚀 PHASE 1 COMPLETE (HANDOFF POINT)
-    # =====================================================
-    # At this point we ONLY prepare data.
-    # Actual SVG editing will be done by Lifafay system
-    # via API in Phase 2.
-
-    dlog("✅ PHASE 1 SUCCESS")
-    dlog(f"READY FOR LIFAFAY → folder={folder_path}")
-    dlog(f"READY FOR LIFAFAY → svg={svg_path}")
-    dlog(f"READY FOR LIFAFAY → action=move_text")
-    dlog(f"READY FOR LIFAFAY → alignment={alignment}")
-
+    # STEP 5 — SEND TO LIFAFAY (NO SVG EDIT HERE)
     payload = {
-    "folder_path": folder_path,
-    "svg_path": svg_path,
-    "action": "move_text",
-    "alignment": alignment,
-    "source": "whatsapp",
-    "phone": phone,
-    "reply_whatsapp_id": reply_whatsapp_id
+        "folder_path": folder_path,
+        "svg_path": svg_path,
+        "action": "move_text",
+        "alignment": alignment,
+        "phone": phone,
+        "reply_whatsapp_id": reply_whatsapp_id,
+        "source": "whatsapp"
     }
 
-    dlog("📤 Sending payload to Lifafay")
-    dlog(payload)
+    dlog(f"🚀 Sending payload to Lifafay → {json.dumps(payload)}")
+
+    headers = {"Content-Type": "application/json"}
+    if LIFAFAY_API_KEY:
+        headers["Authorization"] = f"Bearer {LIFAFAY_API_KEY}"
 
     try:
-        import requests
-        LIFAFAY_ENDPOINT = os.getenv("LIFAFAY_EDIT_ENDPOINT")
-
         resp = requests.post(
             LIFAFAY_ENDPOINT,
             json=payload,
-            timeout=20
+            headers=headers,
+            timeout=15
         )
 
-        dlog(f"📥 Lifafay response status={resp.status_code}")
-        dlog(resp.text)
-
-        return True
+        dlog(f"📡 Lifafay response status={resp.status_code}")
+        dlog(f"📡 Lifafay response body={resp.text}")
 
     except Exception as e:
         dlog(f"❌ Lifafay call failed: {e}")
         return False
+
+    dlog("✅ Design reply handed off to Lifafay successfully")
+    return True
