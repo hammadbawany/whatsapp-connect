@@ -1,7 +1,25 @@
 import re
 import sys
 import json
-import requests
+
+# ===============================
+# IMPORTS
+# ===============================
+try:
+    from lifafay_client import send_to_lifafay
+except ImportError:
+    # Fallback if lifafay_client.py is missing
+    import requests
+    def send_to_lifafay(payload):
+        print("[FALLBACK] Sending to Lifafay (Client missing)...")
+        # Ensure we have the URL
+        url = "https://lifafay.herokuapp.com/api/design/action"
+        try:
+            res = requests.post(url, json=payload, timeout=15)
+            return res.status_code == 200
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
 
 from app.plugins.dropbox_plugin import get_system_dropbox_client
 
@@ -10,7 +28,6 @@ from app.plugins.dropbox_plugin import get_system_dropbox_client
 # ===============================
 
 BASE_DROPBOX_FOLDER = "/1 daniyal/Auto/send to customer"
-LIFAFAY_ENDPOINT = "https://lifafay.herokuapp.com/api/design/action"
 
 # ===============================
 # LOGGING
@@ -21,39 +38,36 @@ def dlog(msg):
     sys.stdout.flush()
 
 # ===============================
-# STEP 1 — INTENT (PHASE 1 ONLY)
+# STEP 1 — INTENT
 # ===============================
 
 def detect_alignment_intent(text: str):
-    dlog(f"detect_alignment_intent called with text='{text}'")
-
     t = text.lower()
-
     if any(k in t for k in ["center", "centre", "beech", "center karo", "center kar"]):
-        dlog("✅ Alignment detected: center")
         return "center"
-
     if any(k in t for k in ["right", "dayen", "right side"]):
-        dlog("✅ Alignment detected: right")
         return "right"
-
     if any(k in t for k in ["left", "baen", "left side"]):
-        dlog("✅ Alignment detected: left")
         return "left"
-
-    dlog("❌ No alignment intent detected")
     return None
 
 # ===============================
 # STEP 2 — FIND ORDER FOLDER
 # ===============================
 
-def normalize_phone(s: str):
+def normalize_digits(s: str):
+    """Removes non-digit characters."""
     return re.sub(r"\D", "", s or "")
 
 def find_order_folder(dbx, phone: str):
-    dlog("find_order_folder called")
-    dlog(f"phone={phone}")
+    dlog(f"🔍 Searching for folder for Phone: {phone}")
+
+    target_digits = normalize_digits(phone)
+    if not target_digits or len(target_digits) < 5:
+        dlog("❌ Phone number too short or invalid.")
+        return None
+
+    matched = []
 
     try:
         res = dbx.files_list_folder(BASE_DROPBOX_FOLDER)
@@ -61,50 +75,74 @@ def find_order_folder(dbx, phone: str):
         dlog(f"❌ Dropbox list failed: {e}")
         return None
 
-    phone_digits = normalize_phone(phone)
-    matched = []
+    def process_entries(entries):
+        for entry in entries:
+            # Basic checks
+            if not entry.name:
+                continue
 
-    for entry in res.entries:
-        if not entry.name:
-            continue
+            # Use lower case for checking keywords
+            name_lower = entry.name.lower()
 
-        folder_digits = normalize_phone(entry.name)
+            # ⛔️ CRITICAL: Block 'confirm' folder
+            if name_lower == "confirm" or name_lower.endswith("/confirm"):
+                # dlog(f"   [SKIP] Ignored restricted folder: {entry.name}")
+                continue
 
-        # match both ways (handles multiple numbers, formats)
-        if phone_digits in folder_digits or folder_digits in phone_digits:
-            matched.append(entry.path_lower)
+            # ✅ RULE 1: Must contain '---'
+            if "---" not in entry.name:
+                # dlog(f"   [SKIP] Missing '---': {entry.name}")
+                continue
 
-    dlog(f"Matched folders count = {len(matched)}")
-    dlog(f"Matched folders = {matched}")
+            # ✅ RULE 2: Check phone number
+            # We normalize the folder name to just digits to find the phone number
+            # allowing for formats like "92-346..." or "92 346..."
+            folder_digits = normalize_digits(entry.name)
 
-    return matched[0] if matched else None
+            if target_digits in folder_digits:
+                dlog(f"✅ MATCH FOUND: {entry.name}")
+                matched.append(entry.path_display)
+            else:
+                # Optional: debug print for near-misses
+                # dlog(f"   [SKIP] Phone mismatch: {entry.name}")
+                pass
+
+    # 1. Process first batch
+    process_entries(res.entries)
+
+    # 2. Pagination Loop
+    while res.has_more:
+        try:
+            res = dbx.files_list_folder_continue(res.cursor)
+            process_entries(res.entries)
+        except Exception as e:
+            dlog(f"⚠️ Dropbox pagination error: {e}")
+            break
+
+    # 3. Final Selection
+    if not matched:
+        dlog(f"❌ No folder found containing {target_digits}")
+        return None
+
+    # Prioritize folder starting with phone number if multiple found
+    selected_path = matched[0]
+    if len(matched) > 1:
+        dlog(f"⚠️ Multiple matches: {matched}")
+        for m in matched:
+            if target_digits in normalize_digits(m.split('/')[-1].split('---')[0]):
+                selected_path = m
+                break
+
+    # ⛔️ FINAL SAFETY CHECK
+    if selected_path.lower().endswith("/confirm"):
+        dlog("❌ ERROR: Selected path is 'confirm' despite checks. Aborting.")
+        return None
+
+    dlog(f"📂 Final Selected Folder: {selected_path}")
+    return selected_path
 
 # ===============================
-# STEP 3 — HAND OFF TO LIFAFAY
-# ===============================
-
-def send_to_lifafay(payload: dict):
-    dlog("📡 Sending payload to Lifafay")
-    dlog(json.dumps(payload, indent=2))
-
-    try:
-        resp = requests.post(
-            LIFAFAY_ENDPOINT,
-            json=payload,
-            timeout=15
-        )
-
-        dlog(f"📡 Lifafay response status={resp.status_code}")
-        dlog(f"📡 Lifafay response body={resp.text}")
-
-        return resp.status_code == 200
-
-    except Exception as e:
-        dlog(f"❌ Lifafay request failed: {e}")
-        return False
-
-# ===============================
-# MAIN ENTRY (PHASE 1)
+# MAIN ENTRY
 # ===============================
 
 def handle_design_reply(
@@ -114,19 +152,13 @@ def handle_design_reply(
     reply_whatsapp_id: str
 ):
     dlog("=" * 46)
-    dlog("handle_design_reply STARTED")
-    dlog(f"phone={phone}")
-    dlog(f"customer_text='{customer_text}'")
-    dlog(f"reply_caption='{reply_caption}'")
-    dlog(f"reply_whatsapp_id={reply_whatsapp_id}")
+    dlog(f"🚀 handle_design_reply | Phone: {phone} | Caption: {reply_caption}")
 
     # 1️⃣ Detect intent
     alignment = detect_alignment_intent(customer_text)
     if not alignment:
-        dlog("❌ EXIT: No alignment intent")
+        dlog("❌ No alignment intent")
         return False
-
-    dlog(f"Alignment intent → {alignment}")
 
     # 2️⃣ Dropbox client
     try:
@@ -135,15 +167,13 @@ def handle_design_reply(
         dlog(f"❌ Dropbox auth failed: {e}")
         return False
 
-    # 3️⃣ Find folder (PHONE ONLY — AS YOU REQUIRED)
+    # 3️⃣ Find folder
     folder_path = find_order_folder(dbx, phone)
     if not folder_path:
-        dlog("❌ EXIT: Order folder not found")
+        dlog("❌ EXIT: Could not find valid order folder.")
         return False
 
-    dlog(f"Matched Dropbox folder → {folder_path}")
-
-    # 4️⃣ Hand off to Lifafay (NO EDITING HERE)
+    # 4️⃣ Hand off to Lifafay
     payload = {
         "source": "whatsapp",
         "phone": phone,
@@ -154,11 +184,7 @@ def handle_design_reply(
         "caption": reply_caption
     }
 
+    dlog("📡 Handing off to Lifafay...")
     success = send_to_lifafay(payload)
 
-    if success:
-        dlog("✅ Design reply handed off to Lifafay successfully")
-        return True
-
-    dlog("❌ Lifafay handoff failed")
-    return False
+    return success
