@@ -60,8 +60,8 @@ def detect_alignment_intent(text: str):
 
     # HORIZONTAL ONLY
     if is_center: return "center"
-    if is_left: return "left"
-    if is_right: return "right"
+    if is_left: return "bottom_left"
+    if is_right: return "bottom_right"
 
     return None
 
