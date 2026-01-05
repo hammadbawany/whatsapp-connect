@@ -699,16 +699,16 @@ def auto_correction_status():
 def get_system_dropbox_client():
     """
     Returns a Dropbox client using SYSTEM credentials.
-    Priority 1: SYSTEM_REFRESH_TOKEN (Correct method, handles auto-refresh)
-    Priority 2: SYSTEM_DROPBOX_TOKEN (Old method, manual update required)
+    Priority 1: SYSTEM_REFRESH_TOKEN (Env Var)
+    Priority 2: Database Fallback (Uses the Admin's login session)
+    Priority 3: SYSTEM_DROPBOX_TOKEN (Static Env Var - deprecated/fallback)
     """
 
-    # 1. Preferred: Refresh Token Flow (Never expires if used regularly)
+    # 1. Try Environment Variable Refresh Token (Fastest)
     refresh_token = os.getenv("SYSTEM_REFRESH_TOKEN")
 
     if refresh_token and APP_KEY and APP_SECRET:
         try:
-            # Dropbox SDK handles the refresh logic automatically
             dbx = dropbox.Dropbox(
                 oauth2_refresh_token=refresh_token,
                 app_key=APP_KEY,
@@ -718,19 +718,66 @@ def get_system_dropbox_client():
             dbx.users_get_current_account()
             return dbx
         except Exception as e:
-            print(f"[SYSTEM DBX] ⚠️ Auto-refresh failed: {e}. Falling back to static token.")
+            print(f"[SYSTEM DBX] ⚠️ Auto-refresh via Env Var failed: {e}")
 
-    # 2. Fallback: Static Access Token
-    access_token = os.getenv("SYSTEM_DROPBOX_TOKEN")
-
-    if not access_token:
-        raise Exception("Missing Dropbox Credentials! Please set SYSTEM_REFRESH_TOKEN in Heroku Config Vars.")
-
-    dbx = dropbox.Dropbox(access_token)
-
+    # 2. Database Fallback (Most Reliable for active apps)
+    # Fetches the token from the 'dropbox_accounts' table
     try:
-        dbx.users_get_current_account()
-    except Exception as e:
-        raise Exception(f"System Dropbox auth failed: {e}")
+        conn = get_conn()
+        cur = conn.cursor()
+        # Get the most recently active account
+        cur.execute("SELECT access_token, refresh_token FROM dropbox_accounts ORDER BY token_updated_at DESC LIMIT 1")
+        row = cur.fetchone()
 
-    return dbx
+        # If no timestamp, just get any account
+        if not row:
+            cur.execute("SELECT access_token, refresh_token FROM dropbox_accounts LIMIT 1")
+            row = cur.fetchone()
+
+        cur.close()
+        conn.close()
+
+        if row:
+            # Handle tuple vs dict based on cursor factory
+            if isinstance(row, dict):
+                db_access = row['access_token']
+                db_refresh = row['refresh_token']
+            else:
+                db_access = row[0]
+                db_refresh = row[1]
+
+            # Try constructing with refresh token (preferred)
+            if db_refresh:
+                print("[SYSTEM DBX] 🔄 Using Database REFRESH token")
+                dbx = dropbox.Dropbox(
+                    oauth2_refresh_token=db_refresh,
+                    app_key=APP_KEY,
+                    app_secret=APP_SECRET
+                )
+                dbx.users_get_current_account()
+                return dbx
+
+            # Fallback to Access Token (might be expired, but worth a shot)
+            elif db_access:
+                print("[SYSTEM DBX] ⚠️ Using Database ACCESS token (No refresh token found)")
+                dbx = dropbox.Dropbox(db_access)
+                dbx.users_get_current_account()
+                return dbx
+
+    except Exception as e:
+        print(f"[SYSTEM DBX] ⚠️ Database fallback failed: {e}")
+
+
+    # 3. Fallback: Static Access Token (Likely expired, but last resort)
+    access_token = os.getenv("SYSTEM_DROPBOX_TOKEN")
+    if access_token:
+        print("[SYSTEM DBX] ⚠️ Falling back to static SYSTEM_DROPBOX_TOKEN")
+        dbx = dropbox.Dropbox(access_token)
+        try:
+            dbx.users_get_current_account()
+            return dbx
+        except Exception as e:
+            print(f"System Dropbox auth failed: {e}")
+            raise e
+
+    raise Exception("No valid Dropbox authentication method found (Env or DB).")

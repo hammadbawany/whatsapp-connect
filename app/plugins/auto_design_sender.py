@@ -358,7 +358,7 @@ def run_scheduled_automation():
                 sent_any = True
 
             if sent_any:
-                send_text_via_meta_and_db(active_phone, "Please confirm text and design.\nNo changes will be made after confirmation")
+                send_text_via_meta_and_db(active_phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
                 update_sent_status(item['folder_name'], f"{len(pngs)} files", method='cron')
                 move_folder_after_sending(dbx, item['display_path'], item['folder_name'])
             else:
@@ -480,7 +480,7 @@ def run_auto_design_delivery():
                 sent_any = True
 
             if sent_any:
-                send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation")
+                send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
                 update_sent_status(folder, f"{len(pngs)} files", method='manual_batch')
                 move_folder_after_sending(dbx, full_path, folder)
                 sent_count += 1
@@ -536,7 +536,7 @@ def manual_send_design():
             except Exception as e: errors.append(f"{f.name}: {str(e)}")
 
         if sent_count > 0:
-            try: send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation")
+            try: send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
             except: pass
 
             update_sent_status(folder, f"{sent_count} PNGs", method='manual_single')

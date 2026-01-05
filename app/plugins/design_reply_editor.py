@@ -47,33 +47,74 @@ def dlog(msg):
 def detect_alignment_intent(text: str):
     """
     Phase-1 intent detection:
-    ONLY detect requests to MOVE / PLACE text horizontally.
-    Ignore size, bold, light, visibility, etc.
+    Detect ONLY placement / movement of text.
+    Horizontal + Vertical (limited).
     """
+
+    if not text:
+        return None
 
     t = text.lower()
 
-    # 1️⃣ Must contain a movement / placement verb
+    # Must contain a movement / placement verb
     move_verbs = [
         "move", "shift", "place", "write",
         "kar do", "kar dein", "kar den",
-        "laga do", "laga dein"
+        "laga do", "laga dein",
+        "rakh do", "rakh dein"
     ]
 
     if not any(v in t for v in move_verbs):
         return None
 
-    # 2️⃣ Horizontal intent
-    if any(k in t for k in ["center", "centre", "beech", "center mein", "center mn"]):
+    # ----------------------------
+    # VERTICAL FIRST (BOTTOM)
+    # ----------------------------
+    is_bottom = any(k in t for k in [
+        "bottom", "neeche", "neechay", "nechy",
+        "lower", "down", "neechey"
+    ])
+
+    # ----------------------------
+    # HORIZONTAL
+    # ----------------------------
+    is_center = any(k in t for k in [
+        "center", "centre", "beech",
+        "center mein", "center mn"
+    ])
+
+    is_left = any(k in t for k in [
+        "left", "left side", "baen"
+    ])
+
+    is_right = any(k in t for k in [
+        "right", "right side", "dayen"
+    ])
+
+    # ----------------------------
+    # COMBINATIONS
+    # ----------------------------
+    if is_bottom:
+        if is_left:
+            return "bottom_left"
+        if is_right:
+            return "bottom_right"
+        return "bottom_center"
+
+    # ----------------------------
+    # FALLBACK (HORIZONTAL ONLY)
+    # ----------------------------
+    if is_center:
         return "center"
 
-    if any(k in t for k in ["right", "right side", "dayen"]):
-        return "right"
-
-    if any(k in t for k in ["left", "left side", "baen"]):
+    if is_left:
         return "left"
 
+    if is_right:
+        return "right"
+
     return None
+
 
 # ===============================
 # STEP 2 — FIND ORDER FOLDER
