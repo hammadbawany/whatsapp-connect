@@ -27,8 +27,11 @@ from app.plugins.dropbox_plugin import get_system_dropbox_client
 # CONFIG
 # ===============================
 
-BASE_DROPBOX_FOLDER = "/1 daniyal/Auto/send to customer"
-
+BASE_DROPBOX_FOLDERS = [
+    "/1 daniyal/Auto/send to customer",
+    "/1 daniyal/Auto/send to customer/Correction done",
+    "/1 daniyal/Auto/send to customer/Edited by AI",
+]
 # ===============================
 # LOGGING
 # ===============================
@@ -42,13 +45,34 @@ def dlog(msg):
 # ===============================
 
 def detect_alignment_intent(text: str):
+    """
+    Phase-1 intent detection:
+    ONLY detect requests to MOVE / PLACE text horizontally.
+    Ignore size, bold, light, visibility, etc.
+    """
+
     t = text.lower()
-    if any(k in t for k in ["center", "centre", "beech", "center karo", "center kar"]):
+
+    # 1️⃣ Must contain a movement / placement verb
+    move_verbs = [
+        "move", "shift", "place", "write",
+        "kar do", "kar dein", "kar den",
+        "laga do", "laga dein"
+    ]
+
+    if not any(v in t for v in move_verbs):
+        return None
+
+    # 2️⃣ Horizontal intent
+    if any(k in t for k in ["center", "centre", "beech", "center mein", "center mn"]):
         return "center"
-    if any(k in t for k in ["right", "dayen", "right side"]):
+
+    if any(k in t for k in ["right", "right side", "dayen"]):
         return "right"
-    if any(k in t for k in ["left", "baen", "left side"]):
+
+    if any(k in t for k in ["left", "left side", "baen"]):
         return "left"
+
     return None
 
 # ===============================
@@ -69,73 +93,65 @@ def find_order_folder(dbx, phone: str):
 
     matched = []
 
-    try:
-        res = dbx.files_list_folder(BASE_DROPBOX_FOLDER)
-    except Exception as e:
-        dlog(f"❌ Dropbox list failed: {e}")
-        return None
-
     def process_entries(entries):
         for entry in entries:
-            # Basic checks
             if not entry.name:
                 continue
 
-            # Use lower case for checking keywords
             name_lower = entry.name.lower()
 
-            # ⛔️ CRITICAL: Block 'confirm' folder
+            # ⛔️ Block confirm folder
             if name_lower == "confirm" or name_lower.endswith("/confirm"):
-                # dlog(f"   [SKIP] Ignored restricted folder: {entry.name}")
                 continue
 
-            # ✅ RULE 1: Must contain '---'
+            # Must contain ---
             if "---" not in entry.name:
-                # dlog(f"   [SKIP] Missing '---': {entry.name}")
                 continue
 
-            # ✅ RULE 2: Check phone number
-            # We normalize the folder name to just digits to find the phone number
-            # allowing for formats like "92-346..." or "92 346..."
             folder_digits = normalize_digits(entry.name)
 
             if target_digits in folder_digits:
-                dlog(f"✅ MATCH FOUND: {entry.name}")
+                dlog(f"✅ MATCH FOUND: {entry.path_display}")
                 matched.append(entry.path_display)
-            else:
-                # Optional: debug print for near-misses
-                # dlog(f"   [SKIP] Phone mismatch: {entry.name}")
-                pass
 
-    # 1. Process first batch
-    process_entries(res.entries)
+    # 🔁 SEARCH EACH BASE FOLDER
+    for base_folder in BASE_DROPBOX_FOLDERS:
+        dlog(f"📂 Searching in: {base_folder}")
 
-    # 2. Pagination Loop
-    while res.has_more:
         try:
-            res = dbx.files_list_folder_continue(res.cursor)
-            process_entries(res.entries)
+            res = dbx.files_list_folder(base_folder)
         except Exception as e:
-            dlog(f"⚠️ Dropbox pagination error: {e}")
-            break
+            dlog(f"⚠️ Cannot access {base_folder}: {e}")
+            continue
 
-    # 3. Final Selection
+        process_entries(res.entries)
+
+        while res.has_more:
+            try:
+                res = dbx.files_list_folder_continue(res.cursor)
+                process_entries(res.entries)
+            except Exception as e:
+                dlog(f"⚠️ Pagination error in {base_folder}: {e}")
+                break
+
     if not matched:
         dlog(f"❌ No folder found containing {target_digits}")
         return None
 
-    # Prioritize folder starting with phone number if multiple found
+    # Prefer folder starting with phone number
     selected_path = matched[0]
     if len(matched) > 1:
-        dlog(f"⚠️ Multiple matches: {matched}")
+        dlog(f"⚠️ Multiple matches found:")
         for m in matched:
-            if target_digits in normalize_digits(m.split('/')[-1].split('---')[0]):
+            dlog(f"   - {m}")
+            folder_name = m.split("/")[-1]
+            if target_digits in normalize_digits(folder_name.split('---')[0]):
                 selected_path = m
                 break
 
-    # ⛔️ FINAL SAFETY CHECK
+    # Final safety check
     if selected_path.lower().endswith("/confirm"):
-        dlog("❌ ERROR: Selected path is 'confirm' despite checks. Aborting.")
+        dlog("❌ ERROR: Selected path is 'confirm'. Aborting.")
         return None
 
     dlog(f"📂 Final Selected Folder: {selected_path}")
@@ -188,3 +204,36 @@ def handle_design_reply(
     success = send_to_lifafay(payload)
 
     return success
+
+
+def detect_confirmation_intent(text: str):
+    if not text:
+        return False
+
+    t = text.lower().strip()
+
+    strong_confirm = [
+        "confirm", "confirmed", "approved", "final", "ok confirmed",
+        "yes confirmed", "go ahead", "print it", "proceed"
+    ]
+
+    soft_confirm = [
+        "ok", "okay", "done", "perfect", "looks good", "this is fine",
+        "alright", "sure", "jee", "ji", "sahi hai", "theek hai"
+    ]
+
+    emojis = ["👍", "👌"]
+
+    # Strong keywords
+    if any(k in t for k in strong_confirm):
+        return True
+
+    # Emoji-only confirmations
+    if any(e in t for e in emojis) and len(t) <= 3:
+        return True
+
+    # Soft confirmations (only if message is short)
+    if any(k == t or t.startswith(k) for k in soft_confirm) and len(t) <= 15:
+        return True
+
+    return False

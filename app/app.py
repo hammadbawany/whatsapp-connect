@@ -3837,3 +3837,171 @@ def automation_preview():
 
 def send_text_internal(phone, text):
     send_text_via_meta_and_db(phone, text)
+
+
+@app.route("/api/tag_chat", methods=["POST"])
+def tag_chat():
+    data = request.get_json(silent=True) or {}
+
+    phone = data.get("phone")
+    tag_id = data.get("tag_id")
+
+    if not phone or not tag_id:
+        return jsonify({"success": False, "error": "Missing phone or tag_id"}), 400
+
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # 🔒 Prevent duplicate tagging
+        cur.execute("""
+            INSERT INTO chat_tags (phone, tag_id, source)
+            VALUES (%s, %s, 'ai')
+            ON CONFLICT (phone, tag_id) DO NOTHING
+        """, (phone, tag_id))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"🏷️ Chat tagged → phone={phone}, tag_id={tag_id}")
+        return jsonify({"success": True}), 200
+
+    except Exception as e:
+        print(f"❌ Tagging failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+#courier whatsapp msgs
+@app.route("/api/external/ship_via_courier", methods=["POST"])
+def external_send_shipment():
+    try:
+        # =====================================================
+        # 1️⃣ SECURITY CHECK
+        # =====================================================
+        incoming_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("API_SECRET", "default_secret")
+
+        if incoming_key != expected_key:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        # =====================================================
+        # 2️⃣ INPUT DATA
+        # =====================================================
+        data = request.get_json(silent=True) or {}
+
+        raw_phone = data.get("phone")
+        name = str(data.get("name", "")).strip()
+        order_number = str(data.get("order_number", "")).strip()
+        courier_name = str(data.get("courier_name", "")).strip()
+        amount = str(data.get("amount", "")).strip()
+        tracking_number = str(data.get("tracking_number", "")).strip()
+
+        phone = normalize_phone(raw_phone)
+        if not phone:
+            return jsonify({"error": "Invalid phone"}), 400
+
+        if not all([name, order_number, courier_name, amount, tracking_number]):
+            return jsonify({"error": "Missing template variables"}), 400
+
+        # =====================================================
+        # 3️⃣ LOAD WHATSAPP ACCOUNT
+        # =====================================================
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute("""
+            SELECT id, phone_number_id, access_token
+            FROM whatsapp_accounts
+            WHERE waba_id = %s
+            LIMIT 1
+        """, (TARGET_WABA_ID,))
+        acc = cur.fetchone()
+
+        if not acc:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "WhatsApp account not connected"}), 500
+
+        # =====================================================
+        # 4️⃣ META PAYLOAD (BODY + URL BUTTON)
+        # =====================================================
+        url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": {
+                "name": "order_shipment_with_tracking",
+                "language": {"code": "en_US"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": name},            # {{1}}
+                            {"type": "text", "text": order_number},    # {{2}}
+                            {"type": "text", "text": courier_name},    # {{3}}
+                            {"type": "text", "text": amount},          # {{4}}
+                            {"type": "text", "text": tracking_number}  # {{5}}
+                        ]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": "0"
+                        # ❌ NO parameters here
+                    }
+                ]
+            }
+        }
+
+        headers = {
+            "Authorization": f"Bearer {acc['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        print("🚀 Sending shipment with tracking")
+        print(json.dumps(payload, indent=2))
+
+        # =====================================================
+        # 5️⃣ SEND TO META
+        # =====================================================
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        resp_json = resp.json()
+
+        if resp.status_code not in [200, 201]:
+            return jsonify({"success": False, "meta_error": resp_json}), 400
+
+        wa_id = resp_json["messages"][0]["id"]
+
+        # =====================================================
+        # 6️⃣ SAVE MESSAGE
+        # =====================================================
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                message,
+                whatsapp_id,
+                status,
+                timestamp
+            )
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+        """, (
+            acc["id"],
+            phone,
+            f"Order {order_number} shipped via {courier_name}, tracking {tracking_number}",
+            wa_id
+        ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"success": True, "wa_id": wa_id})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
