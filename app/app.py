@@ -3858,8 +3858,8 @@ def tag_chat():
 
         # 🔒 Prevent duplicate tagging
         cur.execute("""
-            INSERT INTO contact_tags (phone, tag_id, source)
-            VALUES (%s, %s, 'ai')
+            INSERT INTO contact_tags (contact_phone, tag_id)
+            VALUES (%s, %s)
             ON CONFLICT (phone, tag_id) DO NOTHING
         """, (phone, tag_id))
 
