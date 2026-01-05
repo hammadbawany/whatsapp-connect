@@ -3936,7 +3936,7 @@ def external_send_shipment():
             "to": phone,
             "type": "template",
             "template": {
-                "name": "order_shipment_with_tracking",
+                "name": "shipped_via_courier",
                 "language": {"code": "en"},
                 "components": [
                     {
