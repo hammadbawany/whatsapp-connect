@@ -3937,7 +3937,7 @@ def external_send_shipment():
             "type": "template",
             "template": {
                 "name": "shipped_via_courier",
-                "language": {"code": "en_US"},
+                "language": {"code": "en"},
                 "components": [
                     {
                         "type": "body",
