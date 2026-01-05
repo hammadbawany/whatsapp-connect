@@ -3936,28 +3936,28 @@ def external_send_shipment():
             "to": phone,
             "type": "template",
             "template": {
-                "name": "shipped_via_courier",
+                "name": "order_shipment_with_tracking",
                 "language": {"code": "en"},
                 "components": [
                     {
                         "type": "body",
                         "parameters": [
-                            {"type": "text", "text": name},            # {{1}}
-                            {"type": "text", "text": order_number},    # {{2}}
-                            {"type": "text", "text": courier_name},    # {{3}}
-                            {"type": "text", "text": amount},          # {{4}}
-                            {"type": "text", "text": tracking_number}  # {{5}}
+                            {"type": "text", "text": name},
+                            {"type": "text", "text": order_number},
+                            {"type": "text", "text": courier_name},
+                            {"type": "text", "text": amount},
+                            {"type": "text", "text": tracking_number}
                         ]
                     },
                     {
                         "type": "button",
                         "sub_type": "url",
                         "index": "0"
-                        # ❌ NO parameters here
                     }
                 ]
             }
         }
+
 
         headers = {
             "Authorization": f"Bearer {acc['access_token']}",
