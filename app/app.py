@@ -3860,7 +3860,7 @@ def tag_chat():
         cur.execute("""
             INSERT INTO contact_tags (contact_phone, tag_id)
             VALUES (%s, %s)
-            ON CONFLICT (phone, tag_id) DO NOTHING
+            ON CONFLICT (contact_phone, tag_id) DO NOTHING
         """, (phone, tag_id))
 
         conn.commit()
