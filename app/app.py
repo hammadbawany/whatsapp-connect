@@ -3948,11 +3948,6 @@ def external_send_shipment():
                             {"type": "text", "text": amount},
                             {"type": "text", "text": tracking_number}
                         ]
-                    },
-                    {
-                        "type": "button",
-                        "sub_type": "url",
-                        "index": "0"
                     }
                 ]
             }
