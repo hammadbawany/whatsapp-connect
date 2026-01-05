@@ -1,31 +1,8 @@
 import re
 import sys
 import json
+import requests
 import os
-
-# ===============================
-# IMPORTS
-# ===============================
-
-try:
-    # ✅ Correct Path: app.plugins.lifafay_client
-    from app.plugins.lifafay_client import send_to_lifafay
-except ImportError:
-    # Fallback: Try root if moved, otherwise define locally to prevent crashes
-    try:
-        from lifafay_client import send_to_lifafay
-    except ImportError:
-        import requests
-        def send_to_lifafay(payload):
-            print("[FALLBACK] Sending to Lifafay (Client import failed)...", file=sys.stdout)
-            url = "https://lifafay.herokuapp.com/api/design/action"
-            try:
-                res = requests.post(url, json=payload, timeout=20)
-                print(f"[FALLBACK] Status: {res.status_code}", file=sys.stdout)
-                return res.status_code == 200
-            except Exception as e:
-                print(f"[FALLBACK] Error: {e}", file=sys.stdout)
-                return False
 
 from app.plugins.dropbox_plugin import get_system_dropbox_client
 
@@ -38,6 +15,9 @@ BASE_DROPBOX_FOLDERS = [
     "/1 daniyal/Auto/send to customer/Correction done",
     "/1 daniyal/Auto/send to customer/Edited by AI",
 ]
+
+# 🔹 UPDATED: Added trailing slash to fix 405 Error
+LIFAFAY_ENDPOINT = "https://lifafay.herokuapp.com/api/design/action/"
 
 # ===============================
 # LOGGING
@@ -52,55 +32,33 @@ def dlog(msg):
 # ===============================
 
 def detect_alignment_intent(text: str):
-    """
-    Phase-1 intent detection:
-    Detect ONLY placement / movement of text.
-    """
-    if not text:
-        return None
-
+    if not text: return None
     t = text.lower()
 
     # Must contain a movement / placement verb
-    move_verbs = [
-        "move", "shift", "place", "write",
-        "kar do", "kar dein", "kar den",
-        "laga do", "laga dein",
-        "rakh do", "rakh dein"
-    ]
+    move_verbs = ["move", "shift", "place", "write", "kar do", "kar dein", "kar den", "laga do", "laga dein", "rakh do", "rakh dein"]
+    if not any(v in t for v in move_verbs): return None
 
-    if not any(v in t for v in move_verbs):
-        return None
-
-    # ----------------------------
     # VERTICAL
-    # ----------------------------
     is_bottom = any(k in t for k in ["bottom", "neeche", "neechay", "nechy", "lower", "down"])
     is_top = any(k in t for k in ["top", "upar", "upper", "upr"])
 
-    # ----------------------------
     # HORIZONTAL
-    # ----------------------------
     is_center = any(k in t for k in ["center", "centre", "beech"])
     is_left = any(k in t for k in ["left", "baen", "ultey"])
     is_right = any(k in t for k in ["right", "dayen", "seedhay"])
 
-    # ----------------------------
     # COMBINATIONS
-    # ----------------------------
     if is_bottom:
         if is_left: return "bottom_left"
         if is_right: return "bottom_right"
         return "bottom_center"
-
     if is_top:
         if is_left: return "top_left"
         if is_right: return "top_right"
         return "top_center"
 
-    # ----------------------------
     # HORIZONTAL ONLY
-    # ----------------------------
     if is_center: return "center"
     if is_left: return "left"
     if is_right: return "right"
@@ -110,15 +68,13 @@ def detect_alignment_intent(text: str):
 def detect_confirmation_intent(text: str):
     if not text: return False
     t = text.lower().strip()
-
-    strong_confirm = ["confirm", "confirmed", "approved", "final", "ok confirmed", "proceed", "print"]
-    soft_confirm = ["ok", "done", "perfect", "good", "sahi", "theek"]
+    strong = ["confirm", "confirmed", "approved", "final", "ok confirmed", "proceed", "print"]
+    soft = ["ok", "done", "perfect", "good", "sahi", "theek"]
     emojis = ["👍", "👌", "✅"]
 
-    if any(k in t for k in strong_confirm): return True
+    if any(k in t for k in strong): return True
     if any(e in t for e in emojis) and len(t) <= 5: return True
-    if any(k == t or t.startswith(k) for k in soft_confirm) and len(t) <= 15: return True
-
+    if any(k == t or t.startswith(k) for k in soft) and len(t) <= 15: return True
     return False
 
 # ===============================
@@ -130,29 +86,22 @@ def normalize_digits(s: str):
 
 def find_order_folder(dbx, phone: str):
     dlog(f"🔍 Searching for folder for Phone: {phone}")
-
     target_digits = normalize_digits(phone)
     if not target_digits or len(target_digits) < 5:
-        dlog("❌ Phone number too short or invalid.")
+        dlog("❌ Phone number too short.")
         return None
 
     matched = []
-
     def process_entries(entries):
         for entry in entries:
             if not entry.name: continue
-
-            # Skip confirm/system folders
             name_lower = entry.name.lower()
             if name_lower == "confirm" or name_lower.endswith("/confirm"): continue
             if "---" not in entry.name: continue
-
-            folder_digits = normalize_digits(entry.name)
-            if target_digits in folder_digits:
+            if target_digits in normalize_digits(entry.name):
                 dlog(f"✅ MATCH FOUND: {entry.path_display}")
                 matched.append(entry.path_display)
 
-    # Search configured base folders
     for base_folder in BASE_DROPBOX_FOLDERS:
         dlog(f"📂 Searching in: {base_folder}")
         try:
@@ -168,7 +117,6 @@ def find_order_folder(dbx, phone: str):
         dlog(f"❌ No folder found containing {target_digits}")
         return None
 
-    # Logic: If multiple matches, prefer the one where phone is at the start
     selected_path = matched[0]
     if len(matched) > 1:
         for m in matched:
@@ -181,38 +129,66 @@ def find_order_folder(dbx, phone: str):
     return selected_path
 
 # ===============================
+# STEP 3 — SEND TO LIFAFAY
+# ===============================
+
+def send_to_lifafay(payload: dict):
+    """
+    Sends payload to Lifafay.
+    Attempts with trailing slash first (to fix 405), then without.
+    """
+    url = LIFAFAY_ENDPOINT
+    dlog(f"📡 Sending to Lifafay: {url}")
+
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+
+        # If 405/404, try removing slash
+        if resp.status_code in [404, 405, 308]:
+            alt_url = url.rstrip("/") if url.endswith("/") else url + "/"
+            dlog(f"⚠️ Got {resp.status_code}, trying alternate URL: {alt_url}")
+            resp = requests.post(alt_url, json=payload, timeout=20)
+
+        dlog(f"📥 Response Status: {resp.status_code}")
+
+        if resp.status_code != 200:
+            dlog(f"📥 Response Error: {resp.text}")
+            return False
+
+        return True
+
+    except Exception as e:
+        dlog(f"❌ API Request Failed: {e}")
+        return False
+
+# ===============================
 # MAIN ENTRY
 # ===============================
 
-def handle_design_reply(
-    phone: str,
-    customer_text: str,
-    reply_caption: str,
-    reply_whatsapp_id: str
-):
+def handle_design_reply(phone: str, customer_text: str, reply_caption: str, reply_whatsapp_id: str):
     dlog("=" * 46)
     dlog(f"🚀 handle_design_reply | Phone: {phone} | Caption: {reply_caption}")
 
-    # 1️⃣ Detect intent
+    # 1. Intent
     alignment = detect_alignment_intent(customer_text)
     if not alignment:
         dlog("❌ No alignment intent")
         return False
 
-    # 2️⃣ Dropbox client
+    # 2. Dropbox
     try:
         dbx = get_system_dropbox_client()
     except Exception as e:
         dlog(f"❌ Dropbox auth failed: {e}")
         return False
 
-    # 3️⃣ Find folder
+    # 3. Folder
     folder_path = find_order_folder(dbx, phone)
     if not folder_path:
-        dlog("❌ EXIT: Could not find valid order folder.")
+        dlog("❌ EXIT: No folder found.")
         return False
 
-    # 4️⃣ Hand off to Lifafay
+    # 4. API
     payload = {
         "source": "whatsapp",
         "phone": phone,
@@ -223,7 +199,6 @@ def handle_design_reply(
         "caption": reply_caption
     }
 
-    # Use the imported function
     success = send_to_lifafay(payload)
 
     if success:
