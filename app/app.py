@@ -450,9 +450,12 @@ def webhook():
                                 log("🎯 DESIGN HANDLER RESULT", handled)
 
                                 if handled:
-                                    log("🛑 STOPPING — design reply handled, skipping automation")
+                                    log(
+                                        "🛑 STOPPING — design reply handled, skipping automation",
+                                        {"phone": phone, "reply_id": context_whatsapp_id}
+                                    )
                                     conn.commit()
-                                    return "OK", 200   # ⛔ THIS LINE IS THE FIX
+                                    return "OK", 200  # ⛔ THIS LINE IS THE FIX
 
                         # 🔥 BACKGROUND AUTOMATION (CORRECT)
                         run_automations(
@@ -3855,7 +3858,7 @@ def tag_chat():
 
         # 🔒 Prevent duplicate tagging
         cur.execute("""
-            INSERT INTO chat_tags (phone, tag_id, source)
+            INSERT INTO contact_tags (phone, tag_id, source)
             VALUES (%s, %s, 'ai')
             ON CONFLICT (phone, tag_id) DO NOTHING
         """, (phone, tag_id))
