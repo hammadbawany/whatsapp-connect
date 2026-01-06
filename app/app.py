@@ -423,6 +423,32 @@ def webhook():
                         ))
 
                         conn.commit()  # 🔥 MUST COMMIT FIRST
+                        if context_whatsapp_id and is_design_confirmation(text):
+
+                            log("✅ DESIGN CONFIRMATION DETECTED", {
+                                "phone": phone,
+                                "reply_to": context_whatsapp_id,
+                                "text": text
+                            })
+
+                            # Mark the replied-to image as confirmed
+                            cur.execute("""
+                                UPDATE messages
+                                SET is_confirmed = TRUE,
+                                    confirmed_at = NOW()
+                                WHERE whatsapp_id = %s
+                                  AND sender = 'agent'
+                                  AND media_type = 'image'
+                            """, (context_whatsapp_id,))
+
+                            conn.commit()
+
+                            # OPTIONAL (Phase-2 later)
+                            # tag_whatsapp_chat(phone, tag_id=5)
+
+                            log("🛑 STOPPING — design confirmed, skipping edits & automation")
+                            return "OK", 200
+
                         # 🔹 DESIGN REPLY HANDLER (PHASE 1)
                         if context_whatsapp_id:
                             log("🎯 DESIGN REPLY FLOW ENTERED", context_whatsapp_id)

@@ -1288,25 +1288,40 @@
     });
 
     document.addEventListener('click', function (e) {
-        // Open Msg Menu
-        if(e.target.closest('.msg-actions')) {
-            e.stopPropagation();
-            const row=e.target.closest('.msg');
-            selectedMsg=messageById.get(row.dataset.msgId);
-            const m=document.getElementById('msg-context-menu');
-            m.style.display='block'; m.style.top=e.pageY+'px'; m.style.left=e.pageX-100+'px';
-            const delAll = m.querySelector('[data-action="delete-everyone"]');
-            if(delAll) delAll.style.display = canDeleteForEveryone(selectedMsg) ? 'block' : 'none';
-            return;
-        }
-        // Reply Click
-        const rb = e.target.closest('.reply-preview');
-        if(rb && !rb.closest('.composer-wrapper')) {
-            const id=rb.dataset.replyId;
-            const m=document.querySelector(`[data-wamid="${id}"]`);
-            if(m){ isNavigatingToReply=true; m.scrollIntoView({behavior:'smooth',block:'center'}); m.classList.add('reply-highlight'); setTimeout(()=>{m.classList.remove('reply-highlight');isNavigatingToReply=false;},1200); }
-        }
-    });
+            // Open Msg Menu
+            if(e.target.closest('.msg-actions')) {
+                e.stopPropagation();
+                const row = e.target.closest('.msg');
+                selectedMsg = messageById.get(row.dataset.msgId);
+                const m = document.getElementById('msg-context-menu');
+
+                // 1. Show temporarily to calculate height
+                m.style.visibility = 'hidden';
+                m.style.display = 'block';
+
+                // 2. Calculate positioning
+                const menuHeight = m.offsetHeight;
+                const clickY = e.pageY;
+                const windowHeight = window.innerHeight;
+
+                // Default: position below cursor
+                let topPos = clickY;
+
+                // If menu goes off-screen, position ABOVE cursor
+                if (clickY + menuHeight > windowHeight - 20) { // 20px padding
+                    topPos = clickY - menuHeight;
+                }
+
+                // 3. Apply styles
+                m.style.top = topPos + 'px';
+                m.style.left = (e.pageX - 100) + 'px';
+                m.style.visibility = 'visible';
+
+                // 4. Handle Delete Everyone visibility
+                const delAll = m.querySelector('[data-action="delete-everyone"]');
+                if(delAll) delAll.style.display = canDeleteForEveryone(selectedMsg) ? 'block' : 'none';
+                return;
+            }
 
     async function deleteForMe(msg) { await fetch('/delete_for_me', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:msg.id})}); refreshChat(true); }
     async function deleteForEveryone(msg) { if(!confirm("Delete for everyone?"))return; await fetch('/delete_for_everyone', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:msg.id})}); refreshChat(true); }
@@ -1504,19 +1519,29 @@ function renderTagFilters() {
     availableTags.forEach(t => tagCounts[t.name] = 0);
 
     // Count chats
-    allChats.forEach(c => {
-        if (!c.tags || c.tags.length === 0) {
-            untaggedCount++;
-        } else {
-            c.tags.forEach(t => {
-                if (tagCounts[t.name] !== undefined) {
-                    tagCounts[t.name]++;
-                } else {
-                    tagCounts[t.name] = 1;
+    // Count chats
+        allChats.forEach(c => {
+            // Determine if chat is unread (using same logic as chat list)
+            const isLocallyUnread = locallyMarkedUnread.has(c.phone);
+            const unreadVal = isLocallyUnread ? Math.max(1, c.unread_count || 0) : (c.unread_count || 0);
+
+            if (!c.tags || c.tags.length === 0) {
+                // ONLY increment untagged count if the chat is Unread
+                if (unreadVal > 0) {
+                    untaggedCount++;
                 }
-            });
-        }
-    });
+            } else {
+                // For named tags, we usually count Total chats (or you can change this to unread too if desired)
+                // Keeping named tags as "Total" for now, based on standard behavior.
+                c.tags.forEach(t => {
+                    if (tagCounts[t.name] !== undefined) {
+                        tagCounts[t.name]++;
+                    } else {
+                        tagCounts[t.name] = 1;
+                    }
+                });
+            }
+        });
 
     // 🟢 2. SMART CHECK: Create a "signature" of the current state
     // This string changes ONLY if counts change, or the active filter changes, or tags change.
