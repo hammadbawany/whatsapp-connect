@@ -4082,3 +4082,26 @@ def external_send_shipment():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+
+def is_design_confirmation(text: str):
+    t = text.lower().strip()
+
+    confirmations = [
+        "ok",
+        "okay",
+        "done",
+        "confirmed",
+        "confirm",
+        "approved",
+        "perfect",
+        "looks good",
+        "this is fine",
+        "yes confirmed",
+        "ok confirmed",
+        "final",
+        "go ahead"
+    ]
+
+    return any(c == t or c in t for c in confirmations)
