@@ -447,7 +447,7 @@ def webhook():
                         """, (context_whatsapp_id,))
 
                         conn.commit()
-                        tag_chat(phone, tag_id=5)
+                        tag_whatsapp_chat(phone, tag_id=5)
                         return "OK", 200
 
                     # -----------------------------------------
@@ -477,7 +477,7 @@ def webhook():
                             """, (img["whatsapp_id"],))
 
                             conn.commit()
-                            tag_chat(phone, tag_id=5)
+                            tag_whatsapp_chat(phone, tag_id=5)
 
                             log("✅ DESIGN CONFIRMED (NO REPLY)", {
                                 "phone": phone,
@@ -4105,3 +4105,22 @@ def is_design_confirmation(text: str):
     ]
 
     return any(c == t or c in t for c in confirmations)
+
+def tag_whatsapp_chat(phone, tag_id):
+    """
+    Calls internal API to tag WhatsApp chat
+    """
+    TAG_ENDPOINT = "https://whatsappconnect-d3b6ade46132.herokuapp.com/api/tag_chat"
+
+    payload = {
+        "phone": phone,
+        "tag_id": tag_id
+    }
+
+    try:
+        res = requests.post(TAG_ENDPOINT, json=payload, timeout=10)
+        print(f"🏷️ WhatsApp tag response: {res.status_code}")
+        return res.status_code == 200
+    except Exception as e:
+        print(f"❌ WhatsApp tagging failed: {e}")
+        return False
