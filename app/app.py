@@ -447,7 +447,7 @@ def webhook():
                         """, (context_whatsapp_id,))
 
                         conn.commit()
-                        tag_whatsapp_chat(phone, tag_id=5)
+                        tag_chat(phone, tag_id=5)
                         return "OK", 200
 
                     # -----------------------------------------
@@ -477,7 +477,7 @@ def webhook():
                             """, (img["whatsapp_id"],))
 
                             conn.commit()
-                            tag_whatsapp_chat(phone, tag_id=5)
+                            tag_chat(phone, tag_id=5)
 
                             log("✅ DESIGN CONFIRMED (NO REPLY)", {
                                 "phone": phone,
