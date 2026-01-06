@@ -401,128 +401,128 @@ def webhook():
                 # ---------- TEXT ----------
                 if msg_type == "text":
                     text = msg.get("text", {}).get("body")
-                    if text:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id,
-                                user_phone,
-                                sender,
-                                message,
-                                whatsapp_id,
-                                context_whatsapp_id,
-                                status,
-                                timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
-                        """, (
+                    if not text:
+                        return "OK", 200
+
+                    # Save message
+                    cur.execute("""
+                        INSERT INTO messages (
                             whatsapp_account_id,
-                            phone,
-                            text,
-                            wa_id,
-                            context_whatsapp_id
-                        ))
+                            user_phone,
+                            sender,
+                            message,
+                            whatsapp_id,
+                            context_whatsapp_id,
+                            status,
+                            timestamp
+                        )
+                        VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
+                    """, (
+                        whatsapp_account_id,
+                        phone,
+                        text,
+                        wa_id,
+                        context_whatsapp_id
+                    ))
+                    conn.commit()  # 🔥 MUST COMMIT FIRST
 
-                        conn.commit()  # 🔥 MUST COMMIT FIRST
-                        # -----------------------------------------
-                        # 🟢 CASE 1: IMAGE-REPLY CONFIRMATION
-                        # -----------------------------------------
-                        if context_whatsapp_id and is_design_confirmation(text):
+                    # -----------------------------------------
+                    # 🟢 CASE 1: IMAGE-REPLY CONFIRMATION
+                    # -----------------------------------------
+                    if context_whatsapp_id and is_design_confirmation(text):
 
-                            log("✅ DESIGN CONFIRMATION (IMAGE REPLY)", {
-                                "phone": phone,
-                                "reply_to": context_whatsapp_id,
-                                "text": text
-                            })
+                        log("✅ DESIGN CONFIRMATION (IMAGE REPLY)", {
+                            "phone": phone,
+                            "reply_to": context_whatsapp_id,
+                            "text": text
+                        })
 
+                        cur.execute("""
+                            UPDATE messages
+                            SET is_confirmed = TRUE,
+                                confirmed_at = NOW()
+                            WHERE whatsapp_id = %s
+                              AND sender = 'agent'
+                              AND media_type = 'image'
+                        """, (context_whatsapp_id,))
+
+                        conn.commit()
+                        tag_whatsapp_chat(phone, tag_id=5)
+                        return "OK", 200
+
+                    # -----------------------------------------
+                    # 🟢 CASE 2: NON-IMAGE CONFIRMATION
+                    # -----------------------------------------
+                    if is_confirmation_text(text):
+
+                        cur.execute("""
+                            SELECT whatsapp_id
+                            FROM messages
+                            WHERE user_phone = %s
+                              AND sender = 'agent'
+                              AND media_type = 'image'
+                              AND is_confirmed = FALSE
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        """, (phone,))
+
+                        img = cur.fetchone()
+
+                        if img:
                             cur.execute("""
                                 UPDATE messages
                                 SET is_confirmed = TRUE,
                                     confirmed_at = NOW()
                                 WHERE whatsapp_id = %s
-                                  AND sender = 'agent'
-                                  AND media_type = 'image'
-                            """, (context_whatsapp_id,))
-                            tag_whatsapp_chat(phone, tag_id=5)
+                            """, (img["whatsapp_id"],))
+
                             conn.commit()
+                            tag_whatsapp_chat(phone, tag_id=5)
+
+                            log("✅ DESIGN CONFIRMED (NO REPLY)", {
+                                "phone": phone,
+                                "image_id": img["whatsapp_id"]
+                            })
+
                             return "OK", 200
 
+                    # -----------------------------------------
+                    # 🟡 CASE 3: DESIGN EDIT (IMAGE REPLY)
+                    # -----------------------------------------
+                    if context_whatsapp_id:
 
-                        # -----------------------------------------
-                        # 🟢 CASE 2: NON-IMAGE CONFIRMATION
-                        # -----------------------------------------
-                        if is_confirmation_text(text):
+                        cur.execute("""
+                            SELECT message
+                            FROM messages
+                            WHERE whatsapp_id = %s
+                              AND sender = 'agent'
+                        """, (context_whatsapp_id,))
+                        row = cur.fetchone()
 
-                            cur.execute("""
-                                SELECT whatsapp_id
-                                FROM messages
-                                WHERE user_phone = %s
-                                  AND sender = 'agent'
-                                  AND media_type = 'image'
-                                  AND is_confirmed = FALSE
-                                ORDER BY timestamp DESC
-                                LIMIT 1
-                            """, (phone,))
+                        if row:
+                            from app.plugins.design_reply_editor import handle_design_reply
 
-                            img = cur.fetchone()
+                            handled = handle_design_reply(
+                                phone=phone,
+                                customer_text=text,
+                                reply_caption=row["message"],
+                                reply_whatsapp_id=context_whatsapp_id
+                            )
 
-                            if img:
-                                cur.execute("""
-                                    UPDATE messages
-                                    SET is_confirmed = TRUE,
-                                        confirmed_at = NOW()
-                                    WHERE whatsapp_id = %s
-                                """, (img["whatsapp_id"],))
-
-                                conn.commit()
-
-                                log("✅ DESIGN CONFIRMED (NO REPLY)", {
-                                    "phone": phone,
-                                    "image_id": img["whatsapp_id"]
-                                })
-                                tag_whatsapp_chat(phone, tag_id=5)
+                            if handled:
+                                log("🛑 STOPPING — design reply handled")
                                 return "OK", 200
 
+                    # -----------------------------------------
+                    # 🔥 CASE 4: NORMAL AUTOMATION
+                    # -----------------------------------------
+                    run_automations(
+                        cur=cur,
+                        phone=phone,
+                        message_text=text,
+                        send_text=send_text_internal
+                    )
 
-
-
-                                # -----------------------------------------
-                                # 🟡 CASE 3: DESIGN EDIT (IMAGE REPLY)
-                                # -----------------------------------------
-                                if context_whatsapp_id:
-                                    log("🎯 DESIGN REPLY FLOW ENTERED", context_whatsapp_id)
-
-                                    cur.execute("""
-                                        SELECT message
-                                        FROM messages
-                                        WHERE whatsapp_id = %s
-                                          AND sender = 'agent'
-                                    """, (context_whatsapp_id,))
-                                    row = cur.fetchone()
-
-                                    if row:
-                                        from app.plugins.design_reply_editor import handle_design_reply
-
-                                        handled = handle_design_reply(
-                                            phone=phone,
-                                            customer_text=text,
-                                            reply_caption=row["message"],
-                                            reply_whatsapp_id=context_whatsapp_id
-                                        )
-
-                                        if handled:
-                                            log("🛑 STOPPING — design reply handled")
-                                            return "OK", 200
-
-
-                                # -----------------------------------------
-                                # 🔥 CASE 4: NORMAL AUTOMATION
-                                # -----------------------------------------
-                                run_automations(
-                                    cur=cur,
-                                    phone=phone,
-                                    message_text=text,
-                                    send_text=send_text_internal
-                                )
 
                 # ---------- MEDIA ----------
                 elif msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
