@@ -442,7 +442,7 @@ def webhook():
                                   AND sender = 'agent'
                                   AND media_type = 'image'
                             """, (context_whatsapp_id,))
-
+                            tag_whatsapp_chat(phone, tag_id=5)
                             conn.commit()
                             return "OK", 200
 
@@ -479,7 +479,7 @@ def webhook():
                                     "phone": phone,
                                     "image_id": img["whatsapp_id"]
                                 })
-
+                                tag_whatsapp_chat(phone, tag_id=5)
                                 return "OK", 200
 
 
