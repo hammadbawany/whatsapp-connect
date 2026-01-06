@@ -207,3 +207,9 @@ def handle_design_reply(phone: str, customer_text: str, reply_caption: str, repl
         dlog("❌ Failed to hand off to Lifafay")
 
     return success
+
+def is_confirmation_text(text: str) -> bool:
+    """
+    Generic confirmation (non-image reply)
+    """
+    return is_design_confirmation(text)
