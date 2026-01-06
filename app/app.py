@@ -3471,7 +3471,7 @@ def external_send_order():
             f"Payable Amount: rs {amount}.\n\n"
             "Click below to manage your order."
         )
-
+        template_name="order_management_3"
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
@@ -3480,10 +3480,19 @@ def external_send_order():
                 message,
                 whatsapp_id,
                 status,
+                message_kind,
+                template_name,
                 timestamp
             )
-            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
-        """, (acc["id"], phone, full_message_body, wa_id))
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', 'template', %s, NOW())
+        """, (
+            acc["id"],
+            phone,
+            full_message_body,   # ✅ FIXED
+            wa_id,
+            template_name
+        ))
+
 
         conn.commit()
         cur.close()
@@ -3907,6 +3916,9 @@ def external_send_shipment():
         if not all([name, order_number, courier_name, amount, tracking_number]):
             return jsonify({"error": "Missing template variables"}), 400
 
+        template_name = "shipped_via_courier"
+        language = "en"   # 🔒 must match approved template
+
         # =====================================================
         # 3️⃣ LOAD WHATSAPP ACCOUNT
         # =====================================================
@@ -3927,7 +3939,7 @@ def external_send_shipment():
             return jsonify({"error": "WhatsApp account not connected"}), 500
 
         # =====================================================
-        # 4️⃣ META PAYLOAD (BODY + URL BUTTON)
+        # 4️⃣ META PAYLOAD
         # =====================================================
         url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
 
@@ -3936,8 +3948,8 @@ def external_send_shipment():
             "to": phone,
             "type": "template",
             "template": {
-                "name": "shipped_via_courier",
-                "language": {"code": "en"},
+                "name": template_name,
+                "language": {"code": language},
                 "components": [
                     {
                         "type": "body",
@@ -3952,7 +3964,6 @@ def external_send_shipment():
                 ]
             }
         }
-
 
         headers = {
             "Authorization": f"Bearer {acc['access_token']}",
@@ -3974,8 +3985,14 @@ def external_send_shipment():
         wa_id = resp_json["messages"][0]["id"]
 
         # =====================================================
-        # 6️⃣ SAVE MESSAGE
+        # 6️⃣ SAVE MESSAGE (IMPORTANT)
         # =====================================================
+        message_body = (
+            f"Your order {order_number} has been shipped via {courier_name}.\n"
+            f"Tracking Number: {tracking_number}\n"
+            f"Payable Amount: {amount}"
+        )
+
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
@@ -3984,14 +4001,17 @@ def external_send_shipment():
                 message,
                 whatsapp_id,
                 status,
+                message_kind,
+                template_name,
                 timestamp
             )
-            VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW())
+            VALUES (%s, %s, 'agent', %s, %s, 'sent', 'template', %s, NOW())
         """, (
             acc["id"],
             phone,
-            f"Order {order_number} shipped via {courier_name}, tracking {tracking_number}",
-            wa_id
+            message_body,
+            wa_id,
+            template_name
         ))
 
         conn.commit()
