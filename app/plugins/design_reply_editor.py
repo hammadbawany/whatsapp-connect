@@ -207,26 +207,3 @@ def handle_design_reply(phone: str, customer_text: str, reply_caption: str, repl
         dlog("❌ Failed to hand off to Lifafay")
 
     return success
-
-
-
-def is_design_confirmation(text: str):
-    t = text.lower().strip()
-
-    confirmations = [
-        "ok",
-        "okay",
-        "done",
-        "confirmed",
-        "confirm",
-        "approved",
-        "perfect",
-        "looks good",
-        "this is fine",
-        "yes confirmed",
-        "ok confirmed",
-        "final",
-        "go ahead"
-    ]
-
-    return any(c == t or c in t for c in confirmations)
