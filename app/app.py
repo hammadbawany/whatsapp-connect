@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 import logging
 import http.client as http_client
+from app.plugins.confirmation import process_design_confirmation
 
 load_dotenv()
 import json
@@ -404,7 +405,7 @@ def webhook():
                     if not text:
                         return "OK", 200
 
-                    # Save message
+                    # 1. Save the incoming text message first
                     cur.execute("""
                         INSERT INTO messages (
                             whatsapp_account_id,
@@ -424,73 +425,22 @@ def webhook():
                         wa_id,
                         context_whatsapp_id
                     ))
-                    conn.commit()  # 🔥 MUST COMMIT FIRST
+                    conn.commit()  # 🔥 MUST COMMIT FIRST so the plugin can see the message
 
-                    # -----------------------------------------
-                    # 🟢 CASE 1: IMAGE-REPLY CONFIRMATION
-                    # -----------------------------------------
-                    if context_whatsapp_id and is_design_confirmation(text):
+                    # =========================================================
+                    # 🟢 PLUGINS: 1. Design Confirmation (Moved to Plugin)
+                    # =========================================================
+                    is_confirmed = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
 
-                        log("✅ DESIGN CONFIRMATION (IMAGE REPLY)", {
-                            "phone": phone,
-                            "reply_to": context_whatsapp_id,
-                            "text": text
-                        })
-
-                        cur.execute("""
-                            UPDATE messages
-                            SET is_confirmed = TRUE,
-                                confirmed_at = NOW()
-                            WHERE whatsapp_id = %s
-                              AND sender = 'agent'
-                              AND media_type = 'image'
-                        """, (context_whatsapp_id,))
-
-                        conn.commit()
-                        tag_whatsapp_chat(phone, tag_id=5)
+                    if is_confirmed:
+                        # If confirmed, we stop here (return OK) so we don't trigger
+                        # other automations or generic replies.
                         return "OK", 200
 
-                    # -----------------------------------------
-                    # 🟢 CASE 2: NON-IMAGE CONFIRMATION
-                    # -----------------------------------------
-                    if is_confirmation_text(text):
-
-                        cur.execute("""
-                            SELECT whatsapp_id
-                            FROM messages
-                            WHERE user_phone = %s
-                              AND sender = 'agent'
-                              AND media_type = 'image'
-                              AND is_confirmed = FALSE
-                            ORDER BY timestamp DESC
-                            LIMIT 1
-                        """, (phone,))
-
-                        img = cur.fetchone()
-
-                        if img:
-                            cur.execute("""
-                                UPDATE messages
-                                SET is_confirmed = TRUE,
-                                    confirmed_at = NOW()
-                                WHERE whatsapp_id = %s
-                            """, (img["whatsapp_id"],))
-
-                            conn.commit()
-                            tag_whatsapp_chat(phone, tag_id=5)
-
-                            log("✅ DESIGN CONFIRMED (NO REPLY)", {
-                                "phone": phone,
-                                "image_id": img["whatsapp_id"]
-                            })
-
-                            return "OK", 200
-
-                    # -----------------------------------------
-                    # 🟡 CASE 3: DESIGN EDIT (IMAGE REPLY)
-                    # -----------------------------------------
+                    # =========================================================
+                    # 🟡 PLUGINS: 2. Design Reply Editor (Image Edit Request)
+                    # =========================================================
                     if context_whatsapp_id:
-
                         cur.execute("""
                             SELECT message
                             FROM messages
@@ -501,21 +451,19 @@ def webhook():
 
                         if row:
                             from app.plugins.design_reply_editor import handle_design_reply
-
                             handled = handle_design_reply(
                                 phone=phone,
                                 customer_text=text,
                                 reply_caption=row["message"],
                                 reply_whatsapp_id=context_whatsapp_id
                             )
-
                             if handled:
                                 log("🛑 STOPPING — design reply handled")
                                 return "OK", 200
 
-                    # -----------------------------------------
-                    # 🔥 CASE 4: NORMAL AUTOMATION
-                    # -----------------------------------------
+                    # =========================================================
+                    # 🔥 PLUGINS: 3. General Automation (Chatbot/Voice)
+                    # =========================================================
                     run_automations(
                         cur=cur,
                         phone=phone,
@@ -4082,45 +4030,3 @@ def external_send_shipment():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
-
-
-def is_design_confirmation(text: str):
-    t = text.lower().strip()
-
-    confirmations = [
-        "ok",
-        "okay",
-        "done",
-        "confirmed",
-        "confirm",
-        "approved",
-        "perfect",
-        "looks good",
-        "this is fine",
-        "yes confirmed",
-        "ok confirmed",
-        "final",
-        "go ahead"
-    ]
-
-    return any(c == t or c in t for c in confirmations)
-
-def tag_whatsapp_chat(phone, tag_id):
-    """
-    Calls internal API to tag WhatsApp chat
-    """
-    TAG_ENDPOINT = "https://whatsappconnect-d3b6ade46132.herokuapp.com/api/tag_chat"
-
-    payload = {
-        "phone": phone,
-        "tag_id": tag_id
-    }
-
-    try:
-        res = requests.post(TAG_ENDPOINT, json=payload, timeout=10)
-        print(f"🏷️ WhatsApp tag response: {res.status_code}")
-        return res.status_code == 200
-    except Exception as e:
-        print(f"❌ WhatsApp tagging failed: {e}")
-        return False
