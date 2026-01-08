@@ -21,6 +21,40 @@ from app.plugins.design_reply_editor import find_order_folder
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
 
 
+
+def infer_target_block(user_text, current_svg):
+    scores = {}
+
+    for block, value in current_svg.items():
+        if not value:
+            continue
+
+        overlap = len(
+            set(value.lower().split()) &
+            set(user_text.lower().split())
+        )
+
+        scores[block] = overlap
+
+    return max(scores, key=scores.get) if scores else None
+
+def resolve_partial_text(old_value, user_text):
+    """
+    Handles:
+    - Not X, it’s Y
+    - Wrong, should be Y
+    - 114 not 113
+    """
+    lines = [l.strip() for l in user_text.split("\n") if l.strip()]
+
+    for l in lines:
+        ll = l.lower()
+        if ll.startswith(("it's ", "it is ", "should be ", "correct is ")):
+            return l.split(" ", 1)[1].strip()
+
+    return lines[-1]
+
+
 # ======================================================
 # 1️⃣ SVG READER (MERGED FROM svg_text_reader.py)
 # ======================================================
@@ -225,7 +259,13 @@ def process_text_change_request(phone, customer_text, reply_caption):
 
     # --- Semantic understanding
     semantic_svg = normalize_svg_semantic(svg_data)
+    # 1️⃣ Keyword guess
     target_block = detect_target_block(customer_text)
+
+    # 2️⃣ SVG-based inference (STRONGER)
+    inferred = infer_target_block(customer_text, semantic_svg)
+    if inferred:
+        target_block = inferred
 
     return {
         "folder_path": folder_path,
@@ -283,12 +323,20 @@ def looks_like_text_content(text):
 def resolve_text_delta(user_text, semantic_svg):
     t = user_text.lower().strip()
 
-    if t.startswith("remove") or t.startswith("delete"):
+    # 1️⃣ Explicit removals
+    if t.startswith(("remove", "delete")):
         return resolve_remove(user_text, semantic_svg)
 
-    if " not " in t:
+    # 2️⃣ Corrections FIRST (most important)
+    correction = resolve_correction(user_text, semantic_svg)
+    if correction:
+        return correction
+
+    # 3️⃣ Partial numeric fixes (114 not 113)
+    if any(c.isdigit() for c in user_text) and "not" in t:
         return resolve_correction(user_text, semantic_svg)
 
+    # 4️⃣ Full replace ONLY if clearly new content
     if looks_like_text_content(user_text):
         return resolve_full_replace(user_text, semantic_svg)
 
