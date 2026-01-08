@@ -453,7 +453,7 @@ def resolve_remove(user_text, semantic_svg):
         "to": ""
     }
 
-    def resolve_correction(user_text, semantic_svg):
+def resolve_correction(user_text, semantic_svg):
     parts = user_text.lower().split(" not ")
     if len(parts) != 2:
         return None
