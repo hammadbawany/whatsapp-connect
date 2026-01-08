@@ -229,6 +229,28 @@ def webhook():
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
 
+                # -------------------------------------------------
+                # 🟢 UNIFY INPUT (TEXT vs BUTTON)
+                # -------------------------------------------------
+                user_response = ""
+
+                if msg_type == "text":
+                    user_response = msg.get("text", {}).get("body", "")
+                elif msg_type == "interactive":
+                    type_interactive = msg.get("interactive", {}).get("type")
+                    if type_interactive == "button_reply":
+                        user_response = msg.get("interactive", {}).get("button_reply", {}).get("title", "")
+                    elif type_interactive == "list_reply":
+                        user_response = msg.get("interactive", {}).get("list_reply", {}).get("title", "")
+                elif msg_type == "button":
+                    user_response = msg.get("button", {}).get("text", "")
+
+                if not user_response:
+                    continue
+
+                # Use 'text' variable for compatibility with rest of logic
+                text = user_response
+
                 context_whatsapp_id = None
                 if msg.get("context"):
                     context_whatsapp_id = msg["context"].get("id")
@@ -239,269 +261,205 @@ def webhook():
                     (phone,)
                 )
 
-                # =================================================
-                # 🟢 TEXT MESSAGE
-                # =================================================
-                if msg_type == "text":
-                    text = msg.get("text", {}).get("body")
-                    if not text:
+                # Save message
+                cur.execute("""
+                    INSERT INTO messages (
+                        whatsapp_account_id,
+                        user_phone,
+                        sender,
+                        message,
+                        whatsapp_id,
+                        context_whatsapp_id,
+                        status,
+                        timestamp
+                    )
+                    VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
+                """, (
+                    whatsapp_account_id,
+                    phone,
+                    text,
+                    wa_id,
+                    context_whatsapp_id
+                ))
+                conn.commit()
+
+                # -------------------------------------------------
+                # 🚦 STATE MACHINE — PENDING TEXT CONFIRMATION (TOP PRIORITY)
+                # -------------------------------------------------
+                if phone in PENDING_TEXT_CONFIRMATIONS:
+                    pending = PENDING_TEXT_CONFIRMATIONS.get(phone)
+                    lower = text.strip().lower()
+
+                    # ⏱ TTL CHECK (4 HOURS)
+                    if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
+                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                        send_text_internal(
+                            phone,
+                            "⏰ That request expired. Please resend the text you want to change."
+                        )
                         continue
 
-                    # Save message
-                    cur.execute("""
-                        INSERT INTO messages (
-                            whatsapp_account_id,
-                            user_phone,
-                            sender,
-                            message,
-                            whatsapp_id,
-                            context_whatsapp_id,
-                            status,
-                            timestamp
-                        )
-                        VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
-                    """, (
-                        whatsapp_account_id,
-                        phone,
-                        text,
-                        wa_id,
-                        context_whatsapp_id
-                    ))
-                    conn.commit()
+                    # CHECK FOR CONFIRM (Text OR Button "✅ Confirm")
+                    CONFIRM_WORDS = {"confirm", "confirmed", "yes confirm", "ok confirm", "please proceed", "✅ confirm"}
 
-                    # -------------------------------------------------
-                    # 🚦 STATE MACHINE — PENDING CONFIRMATION (TOP PRIORITY)
-                    # -------------------------------------------------
-                    if phone in PENDING_TEXT_CONFIRMATIONS:
-                        pending = PENDING_TEXT_CONFIRMATIONS.get(phone)
-                        lower = text.strip().lower()
+                    # ✅ CONFIRM CLICKED -> TRIGGER AI EDIT
+                    if any(w in lower for w in CONFIRM_WORDS):
+                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
 
-                        # ⏱ TTL CHECK (4 HOURS)
-                        if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
-                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                            send_text_internal(
-                                phone,
-                                "⏰ That request expired. Please resend the text you want to change."
-                            )
-                            continue
-
-                        CONFIRM_WORDS = {
-                            "confirm",
-                            "confirmed",
-                            "yes confirm",
-                            "ok confirm",
-                            "please proceed"
+                        payload = {
+                            "action": "text_change",
+                            "source": "whatsapp",
+                            "folder_path": pending["folder_path"],
+                            "final_text": pending["semantic_svg"],
+                            "target_block": pending["target_block"],
+                            "phone": phone
                         }
 
-                        # ✅ CONFIRM
-                        if lower in CONFIRM_WORDS:
-                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                        debug_lifafay_payload(payload)
 
-                            payload = {
-                                "action": "text_change",
-                                "source": "whatsapp",
-                                "folder_path": pending["folder_path"],
-                                "final_text": pending["semantic_svg"],
-                                "target_block": pending["target_block"],
-                                "phone": phone
-                            }
+                        # Call Main.py to edit file
+                        requests.post(
+                            f"{APP_BASE_URL}/api/design/action",
+                            json=payload,
+                            timeout=15
+                        )
 
-                            debug_lifafay_payload(payload)
+                        send_text_internal(
+                            phone,
+                            "✅ Got it! I’m applying the changes and will share the updated design shortly."
+                        )
+                        continue # 🛑 STOP HERE (Don't run order confirmation)
 
-                            requests.post(
-                                f"{APP_BASE_URL}/api/design/action",
-                                json=payload,
-                                timeout=15
-                            )
-
-                            send_text_internal(
-                                phone,
-                                "✅ Got it! I’m applying the changes and will share the updated design shortly."
-                            )
-                            continue
-
-                        # ✏️ CHANGE TEXT
-                        if lower in ["change text", "edit", "no"]:
-                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                            send_text_internal(
-                                phone,
-                                "Sure 👍 Please type the correct text you want to use."
-                            )
-                            continue
-
-                    # -------------------------------------------------
-                    # 5️⃣ DESIGN CONFIRMATION (EXISTING FLOW)
-                    # -------------------------------------------------
-                    if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
+                    # ✏️ CHANGE TEXT CLICKED
+                    if any(w in lower for w in ["change text", "edit", "no", "✏️ edit"]):
+                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                        send_text_internal(
+                            phone,
+                            "Sure 👍 Please type the correct text you want to use."
+                        )
                         continue
 
-                    # -------------------------------------------------
-                    # 🧠 INTENT & ROUTING (UPDATED FOR FREE FLOAT)
-                    # -------------------------------------------------
-                    row = None
+                # -------------------------------------------------
+                # 5️⃣ DESIGN CONFIRMATION (ORDER FINALIZATION)
+                # -------------------------------------------------
+                if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
+                    continue
 
-                    # A. Check Explicit Reply
-                    if context_whatsapp_id:
-                        cur.execute("""
-                            SELECT message FROM messages
-                            WHERE whatsapp_id = %s AND sender = 'agent'
-                        """, (context_whatsapp_id,))
-                        row = cur.fetchone()
+                # -------------------------------------------------
+                # 🧠 INTENT & ROUTING (UPDATED FOR FREE FLOAT)
+                # -------------------------------------------------
+                row = None
 
-                    # B. Check Implicit Free-Float (If no reply context)
-                    if not row and not context_whatsapp_id:
-                        # Only check if text looks like a command or design change
-                        pre_intent = detect_design_intent(text)
-                        if pre_intent in ["text", "layout", "unknown"] or looks_like_text_content(text):
-                            try:
-                                dbx_sys = get_system_dropbox_client()
-                                # Find the user's specific order folder
-                                user_folder = find_order_folder(dbx_sys, phone)
+                # A. Check Explicit Reply
+                if context_whatsapp_id:
+                    cur.execute("""
+                        SELECT message FROM messages
+                        WHERE whatsapp_id = %s AND sender = 'agent'
+                    """, (context_whatsapp_id,))
+                    row = cur.fetchone()
 
-                                if user_folder:
-                                    # List ONLY SVG files in that folder
-                                    entries = dbx_sys.files_list_folder(user_folder).entries
-                                    svg_files = [e.name for e in entries if e.name.lower().endswith(".svg")]
+                # B. Check Implicit Free-Float (If no reply context)
+                if not row and not context_whatsapp_id:
+                    # Only check if text looks like a command or design change
+                    pre_intent = detect_design_intent(text)
+                    if pre_intent in ["text", "layout", "unknown"] or looks_like_text_content(text):
+                        try:
+                            dbx_sys = get_system_dropbox_client()
+                            # Find the user's specific order folder
+                            user_folder = find_order_folder(dbx_sys, phone)
 
-                                    # 🟢 LOGIC: If exactly 1 design exists, assume they mean that one
-                                    if len(svg_files) == 1:
-                                        print(f"✅ [IMPLICIT] Single design found: {svg_files[0]}. Treating free-float as reply.")
-                                        row = {"message": svg_files[0]} # Mock the DB row
-                                        context_whatsapp_id = "implicit_single_design" # Mock ID to pass check
-                                    elif len(svg_files) > 1:
-                                        print(f"⚠️ [IMPLICIT] Multiple designs ({len(svg_files)}) found. Ignoring free-float.")
-                            except Exception as e:
-                                print(f"❌ [IMPLICIT] Error checking Dropbox: {e}")
+                            if user_folder:
+                                # List ONLY SVG files in that folder
+                                entries = dbx_sys.files_list_folder(user_folder).entries
+                                svg_files = [e.name for e in entries if e.name.lower().endswith(".svg")]
 
-                    # C. Process if Context Found (Explicit or Implicit)
-                    if context_whatsapp_id and row:
-                        reply_caption = row["message"]
+                                # 🟢 LOGIC: If exactly 1 design exists, assume they mean that one
+                                if len(svg_files) == 1:
+                                    print(f"✅ [IMPLICIT] Single design found: {svg_files[0]}. Treating free-float as reply.")
+                                    row = {"message": svg_files[0]} # Mock the DB row
+                                    context_whatsapp_id = "implicit_single_design" # Mock ID to pass check
+                                elif len(svg_files) > 1:
+                                    print(f"⚠️ [IMPLICIT] Multiple designs ({len(svg_files)}) found. Ignoring free-float.")
+                        except Exception as e:
+                            print(f"❌ [IMPLICIT] Error checking Dropbox: {e}")
 
-                        intent = detect_design_intent(text)
-                        if intent == "unknown":
-                            intent = "text_implicit" if looks_like_text_content(text) else "chat"
+                # C. Process if Context Found
+                if context_whatsapp_id and row:
+                    reply_caption = row["message"]
 
-                        # -------------------------------
-                        # 🚀 ROUTING
-                        # -------------------------------
-                        if intent == "layout":
-                            from app.plugins.design_reply_editor import handle_design_reply
-                            if handle_design_reply(phone, text, reply_caption, context_whatsapp_id):
-                                continue
+                    intent = detect_design_intent(text)
+                    if intent == "unknown":
+                        intent = "text_implicit" if looks_like_text_content(text) else "chat"
 
-                        elif intent == "typography":
-                            # 🟢 FIX: Check if it's actually a text casing change
-                            if any(x in text.lower() for x in ["capital", "upper", "small", "lower", "case"]):
-                                intent = "text" # Force routing to text handler
-                            else:
-                                send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
-                                continue
-
-                        elif intent == "color":
-                            send_text_internal(phone, "🎨 Color change detected. (Coming soon)")
+                    # -------------------------------
+                    # 🚀 ROUTING
+                    # -------------------------------
+                    if intent == "layout":
+                        from app.plugins.design_reply_editor import handle_design_reply
+                        if handle_design_reply(phone, text, reply_caption, context_whatsapp_id):
                             continue
 
-                        elif intent in ["text", "text_implicit"]:
-                            from app.plugins.text_change_detector import (
-                                process_text_change_request,
-                                resolve_text_delta,
-                                apply_delta
-                            )
-
-                            result = process_text_change_request(
-                                phone=phone,
-                                customer_text=text,
-                                reply_caption=reply_caption
-                            )
-
-                            if not result:
-                                continue
-
-                            semantic_svg = result["semantic_svg"]
-
-                            delta = resolve_text_delta(text, semantic_svg)
-                            updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
-
-
-                            result = process_text_change_request(phone=phone, customer_text=text, reply_caption=reply_caption)
-                            if not result: continue
-
-                            semantic_svg = result["semantic_svg"]
-                            delta = resolve_text_delta(text, semantic_svg)
-                            updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
-
-                            # 🟢 NEW: Send Buttons instead of Text
-                            confirm_msg = build_confirmation_message(updated_svg)
-
-                            buttons = [
-                                {"id": "confirm_text", "title": "✅ Confirm"},
-                                {"id": "edit_text", "title": "✏️ Edit"}
-                            ]
-
-                            send_buttons(phone, confirm_msg, buttons)
-
-                            PENDING_TEXT_CONFIRMATIONS[phone] = {
-                                "folder_path": result["folder_path"],
-                                "semantic_svg": updated_svg,
-                                "target_block": result["target_block"],
-                                "ts": time.time()
-                            }
+                    elif intent == "typography":
+                        # 🟢 FIX: Check if it's actually a text casing change (Capital/Small)
+                        if any(x in text.lower() for x in ["capital", "upper", "small", "lower", "case"]):
+                            intent = "text" # Force routing to text handler
+                        else:
+                            send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
                             continue
 
-                    # -------------------------------------------------
-                    # 🤖 FALLBACK AUTOMATION
-                    # -------------------------------------------------
-                    run_automations(
-                        cur=cur,
-                        phone=phone,
-                        message_text=text,
-                        send_text=send_text_internal
-                    )
+                    elif intent == "color":
+                        send_text_internal(phone, "🎨 Color change detected. (Coming soon)")
+                        continue
 
-                # =================================================
-                # 🟡 MEDIA / BUTTON / INTERACTIVE
-                # =================================================
-                else:
-                    payload_text = ""
-
-                    if msg_type == "interactive":
-                        i = msg.get("interactive", {})
-                        if i.get("type") == "button_reply":
-                            payload_text = i.get("button_reply", {}).get("title")
-                        elif i.get("type") == "list_reply":
-                            payload_text = i.get("list_reply", {}).get("title")
-
-                    elif msg_type == "button":
-                        payload_text = msg.get("button", {}).get("text")
-
-                    if payload_text:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id,
-                                user_phone,
-                                sender,
-                                message,
-                                whatsapp_id,
-                                context_whatsapp_id,
-                                status,
-                                timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
-                        """, (
-                            whatsapp_account_id,
-                            phone,
-                            payload_text,
-                            wa_id,
-                            context_whatsapp_id
-                        ))
-                        conn.commit()
-
-                        run_automations(
-                            cur=cur,
-                            phone=phone,
-                            message_text=payload_text,
-                            send_text=send_text_internal
+                    elif intent in ["text", "text_implicit"]:
+                        from app.plugins.text_change_detector import (
+                            process_text_change_request,
+                            resolve_text_delta,
+                            apply_delta,
+                            build_confirmation_message
                         )
+
+                        result = process_text_change_request(
+                            phone=phone,
+                            customer_text=text,
+                            reply_caption=reply_caption
+                        )
+
+                        if not result:
+                            continue
+
+                        semantic_svg = result["semantic_svg"]
+
+                        delta = resolve_text_delta(text, semantic_svg)
+                        updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
+
+                        # 🟢 SEND BUTTONS INSTEAD OF PLAIN TEXT
+                        confirm_msg = build_confirmation_message(updated_svg)
+
+                        buttons = [
+                            {"id": "confirm_text", "title": "✅ Confirm"},
+                            {"id": "edit_text", "title": "✏️ Edit"}
+                        ]
+
+                        send_buttons(phone, confirm_msg, buttons)
+
+                        PENDING_TEXT_CONFIRMATIONS[phone] = {
+                            "folder_path": result["folder_path"],
+                            "semantic_svg": updated_svg,
+                            "target_block": result["target_block"],
+                            "ts": time.time()
+                        }
+                        continue
+
+                # -------------------------------------------------
+                # 🤖 FALLBACK AUTOMATION
+                # -------------------------------------------------
+                run_automations(
+                    cur=cur,
+                    phone=phone,
+                    message_text=text,
+                    send_text=send_text_internal
+                )
 
             except Exception as e:
                 print(f"❌ Message Processing Error: {e}", file=sys.stdout)
@@ -526,7 +484,7 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-
+    
             # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
