@@ -370,21 +370,36 @@ def resolve_text_delta(user_text, semantic_svg):
     if t.startswith(("remove", "delete")):
         return resolve_remove(user_text, semantic_svg)
 
-    # 2️⃣ Corrections FIRST (most important)
+    # 2️⃣ Explicit "Change to" pattern (FIX FOR YOUR ISSUE)
+    # This catches "change name to Ali" before it gets rejected as a command
+    if " to " in t:
+        parts = t.split(" to ", 1)
+        command_part = parts[0].strip()
+        new_content = parts[1].strip()
+
+        # Check if start is a command
+        if any(v in command_part for v in ["change", "make", "rename", "set", "write"]):
+            # If so, the part AFTER "to" is the new text
+            return {
+                "action": "replace_block",
+                "target_block": "text2", # Default to Name block
+                "to": new_content
+            }
+
+    # 3️⃣ Corrections (e.g. "Ali not Hammad")
     correction = resolve_correction(user_text, semantic_svg)
     if correction:
         return correction
 
-    # 3️⃣ Partial numeric fixes (114 not 113)
+    # 4️⃣ Partial numeric fixes (114 not 113)
     if any(c.isdigit() for c in user_text) and "not" in t:
         return resolve_correction(user_text, semantic_svg)
 
-    # 4️⃣ Full replace ONLY if clearly new content
+    # 5️⃣ Full replace (Only if it looks like raw content)
     if looks_like_text_content(user_text):
         return resolve_full_replace(user_text, semantic_svg)
 
     return None
-
 def resolve_remove(user_text, semantic_svg):
     target_phrase = (
         user_text.lower()
