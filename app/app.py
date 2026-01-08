@@ -32,7 +32,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.plugins.auto_design_sender import run_scheduled_automation
 from app.plugins.voice_bot import voice_bp  # <--- IMPORT
 from app.plugins.automations import run_automations
-from app.plugins.design_reply_editor import handle_design_reply
+from app.plugins.design_reply_editor import handle_design_reply,find_order_folder
 from app.plugins.dropbox_plugin import get_system_dropbox_client
 from app.plugins.auto_design_sender import design_sender_bp  # <--- ADD THIS
 from app.plugins.confirmation import process_design_confirmation
@@ -296,7 +296,6 @@ def webhook():
                         # ✅ CONFIRM
                         if lower in CONFIRM_WORDS:
                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                            debug_lifafay_payload(payload)
 
                             payload = {
                                 "action": "text_change",
@@ -306,6 +305,8 @@ def webhook():
                                 "target_block": pending["target_block"],
                                 "phone": phone
                             }
+
+                            debug_lifafay_payload(payload)
 
                             requests.post(
                                 f"{APP_BASE_URL}/api/design/action",
@@ -335,9 +336,11 @@ def webhook():
                         continue
 
                     # -------------------------------------------------
-                    # 🧠 INTENT & ROUTING
+                    # 🧠 INTENT & ROUTING (UPDATED FOR FREE FLOAT)
                     # -------------------------------------------------
                     row = None
+
+                    # A. Check Explicit Reply
                     if context_whatsapp_id:
                         cur.execute("""
                             SELECT message FROM messages
@@ -345,6 +348,32 @@ def webhook():
                         """, (context_whatsapp_id,))
                         row = cur.fetchone()
 
+                    # B. Check Implicit Free-Float (If no reply context)
+                    if not row and not context_whatsapp_id:
+                        # Only check if text looks like a command or design change
+                        pre_intent = detect_design_intent(text)
+                        if pre_intent in ["text", "layout", "unknown"] or looks_like_text_content(text):
+                            try:
+                                dbx_sys = get_system_dropbox_client()
+                                # Find the user's specific order folder
+                                user_folder = find_order_folder(dbx_sys, phone)
+
+                                if user_folder:
+                                    # List ONLY SVG files in that folder
+                                    entries = dbx_sys.files_list_folder(user_folder).entries
+                                    svg_files = [e.name for e in entries if e.name.lower().endswith(".svg")]
+
+                                    # 🟢 LOGIC: If exactly 1 design exists, assume they mean that one
+                                    if len(svg_files) == 1:
+                                        print(f"✅ [IMPLICIT] Single design found: {svg_files[0]}. Treating free-float as reply.")
+                                        row = {"message": svg_files[0]} # Mock the DB row
+                                        context_whatsapp_id = "implicit_single_design" # Mock ID to pass check
+                                    elif len(svg_files) > 1:
+                                        print(f"⚠️ [IMPLICIT] Multiple designs ({len(svg_files)}) found. Ignoring free-float.")
+                            except Exception as e:
+                                print(f"❌ [IMPLICIT] Error checking Dropbox: {e}")
+
+                    # C. Process if Context Found (Explicit or Implicit)
                     if context_whatsapp_id and row:
                         reply_caption = row["message"]
 
@@ -480,7 +509,6 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-
 
             # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
