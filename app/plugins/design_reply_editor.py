@@ -35,8 +35,14 @@ def detect_alignment_intent(text: str):
     if not text: return None
     t = text.lower()
 
-    # Must contain a movement / placement verb
-    move_verbs = ["move", "shift", "place", "write", "kar do", "kar dein", "kar den", "laga do", "laga dein", "rakh do", "rakh dein"]
+    # 🔹 FIXED: Added 'should be', 'adjust', 'change', 'text', 'side'
+    # If the user mentions "text" + "right", that is enough to signal intent.
+    move_verbs = [
+        "move", "shift", "place", "write", "change", "adjust", "should be",
+        "kar do", "kar dein", "kar den", "laga do", "laga dein", "rakh do", "rakh dein", "kardo",
+        "text", "side", "taraf"
+    ]
+
     if not any(v in t for v in move_verbs): return None
 
     # VERTICAL
@@ -63,20 +69,11 @@ def detect_alignment_intent(text: str):
     if is_left: return "bottom_left"
     if is_right: return "bottom_right"
 
+    # VERTICAL ONLY (Implicit Center)
+    if is_bottom: return "bottom_center"
+    if is_top: return "top_center"
+
     return None
-
-def detect_confirmation_intent(text: str):
-    if not text: return False
-    t = text.lower().strip()
-    strong = ["confirm", "confirmed", "approved", "final", "ok confirmed", "proceed", "print"]
-    soft = ["ok", "done", "perfect", "good", "sahi", "theek"]
-    emojis = ["👍", "👌", "✅"]
-
-    if any(k in t for k in strong): return True
-    if any(e in t for e in emojis) and len(t) <= 5: return True
-    if any(k == t or t.startswith(k) for k in soft) and len(t) <= 15: return True
-    return False
-
 # ===============================
 # STEP 2 — FIND ORDER FOLDER
 # ===============================

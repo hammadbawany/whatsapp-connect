@@ -781,3 +781,20 @@ def get_system_dropbox_client():
             raise e
 
     raise Exception("No valid Dropbox authentication method found (Env or DB).")
+
+# ==========================================
+# SVG HELPERS (FOR DESIGN AUTOMATION)
+# ==========================================
+
+from io import BytesIO
+
+def download_svg_to_memory(dropbox_path: str) -> BytesIO:
+    """
+    Downloads an SVG file from Dropbox and returns it as BytesIO
+    so it can be parsed by xml.etree.ElementTree
+    """
+    dbx = get_system_dropbox_client()
+
+    metadata, response = dbx.files_download(dropbox_path)
+
+    return BytesIO(response.content)
