@@ -390,8 +390,12 @@ def webhook():
                                 continue
 
                         elif intent == "typography":
-                            send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
-                            continue
+                            # 🟢 FIX: Check if it's actually a text casing change
+                            if any(x in text.lower() for x in ["capital", "upper", "small", "lower", "case"]):
+                                intent = "text" # Force routing to text handler
+                            else:
+                                send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
+                                continue
 
                         elif intent == "color":
                             send_text_internal(phone, "🎨 Color change detected. (Coming soon)")
@@ -418,10 +422,23 @@ def webhook():
                             delta = resolve_text_delta(text, semantic_svg)
                             updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
 
-                            send_text_internal(
-                                phone,
-                                build_confirmation_message(updated_svg)
-                            )
+
+                            result = process_text_change_request(phone=phone, customer_text=text, reply_caption=reply_caption)
+                            if not result: continue
+
+                            semantic_svg = result["semantic_svg"]
+                            delta = resolve_text_delta(text, semantic_svg)
+                            updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
+
+                            # 🟢 NEW: Send Buttons instead of Text
+                            confirm_msg = build_confirmation_message(updated_svg)
+
+                            buttons = [
+                                {"id": "confirm_text", "title": "✅ Confirm"},
+                                {"id": "edit_text", "title": "✏️ Edit"}
+                            ]
+
+                            send_buttons(phone, confirm_msg, buttons)
 
                             PENDING_TEXT_CONFIRMATIONS[phone] = {
                                 "folder_path": result["folder_path"],
@@ -3996,3 +4013,42 @@ def debug_lifafay_payload(payload):
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     print("="*80 + "\n")
     sys.stdout.flush()
+
+def send_buttons(phone, text, buttons):
+    """
+    buttons = [{"id": "btn_1", "title": "Button 1"}, ...]
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+    acc = cur.fetchone()
+    cur.close(); conn.close()
+
+    if not acc: return
+
+    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+    headers = {"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}
+
+    # Build Button Components
+    button_components = []
+    for btn in buttons:
+        button_components.append({
+            "type": "reply",
+            "reply": {
+                "id": btn["id"],
+                "title": btn["title"]
+            }
+        })
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": text},
+            "action": {"buttons": button_components}
+        }
+    }
+
+    requests.post(url, headers=headers, json=payload)

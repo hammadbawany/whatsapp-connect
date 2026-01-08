@@ -220,47 +220,28 @@ def detect_target_block(customer_text):
 # ======================================================
 
 def build_confirmation_message(semantic_svg):
-    """
-    Builds confirmation message exactly as final text will appear.
-    - Shows only existing text
-    - No placeholders
-    - No empty lines
-    """
-
     content_lines = []
 
     # text1 (wishes / prefix)
     text1 = semantic_svg.get("text1")
-    if text1:
-        content_lines.append(text1.strip())
+    if text1: content_lines.append(text1.strip())
 
     # text2 (names)
     text2 = semantic_svg.get("text2")
-    if text2:
-        content_lines.append(text2.strip())
+    if text2: content_lines.append(text2.strip())
 
-    # extra information (city, designation, etc.)
+    # extra information
     extras = semantic_svg.get("extra_information", [])
     for item in extras:
-        if item and item.strip():
-            content_lines.append(item.strip())
+        if item and item.strip(): content_lines.append(item.strip())
 
-    # 🚨 Edge case: nothing found
     if not content_lines:
-        return (
-            "I couldn’t find any text in the design to confirm.\n\n"
-            "Please tell me what text you want to add."
-        )
+        return "I couldn’t find any text. Please type what you want to add."
 
-    # Build final message
-    lines = []
-    lines.append("Please confirm the final text 👇\n")
-    lines.extend(content_lines)
-    lines.append("\nReply with:")
-    lines.append("✅ Confirm text")
-    lines.append("✏️ Change text")
-
-    return "\n".join(lines)
+    # 🟢 CHANGED: Just return the content, no instructions
+    msg = "Please confirm the final text 👇\n\n"
+    msg += "\n".join(content_lines)
+    return msg
 
 
 # ======================================================
@@ -370,8 +351,8 @@ def resolve_text_delta(user_text, semantic_svg):
     if t.startswith(("remove", "delete")):
         return resolve_remove(user_text, semantic_svg)
 
-    # 2️⃣ Explicit "Change to" pattern (FIX FOR YOUR ISSUE)
-    # This catches "change name to Ali" before it gets rejected as a command
+    # 2️⃣ Explicit "Change to" pattern
+    # Handles: "change name to Ali", "change to Ali", "make it Ali"
     if " to " in t:
         parts = t.split(" to ", 1)
         command_part = parts[0].strip()
@@ -386,20 +367,57 @@ def resolve_text_delta(user_text, semantic_svg):
                 "to": new_content
             }
 
-    # 3️⃣ Corrections (e.g. "Ali not Hammad")
+    # 3️⃣ Casing/Capitalization Commands (NEW)
+    # Handles: "make A capital", "capital A", "uppercase ali"
+    casing_keywords = ["capital", "upper", "small", "lower"]
+    if any(k in t for k in casing_keywords):
+        words = t.split()
+        # Find potential target word (ignore command words)
+        ignore_list = ["make", "change", "text", "is", "the", "to", "it"] + casing_keywords
+        candidates = [w for w in words if w not in ignore_list]
+
+        if candidates:
+            target_word = candidates[0]
+
+            # Find which block contains this word
+            for block, value in semantic_svg.items():
+                if not value: continue
+
+                # Check if target is inside this block value
+                if target_word.lower() in str(value).lower():
+                    new_val = value
+
+                    # Apply Capitalization
+                    if "capital" in t or "upper" in t:
+                        pattern = re.compile(re.escape(target_word), re.IGNORECASE)
+                        new_val = pattern.sub(target_word.upper(), value)
+
+                    # Apply Lowercase
+                    elif "small" in t or "lower" in t:
+                        pattern = re.compile(re.escape(target_word), re.IGNORECASE)
+                        new_val = pattern.sub(target_word.lower(), value)
+
+                    return {
+                        "action": "replace_block",
+                        "target_block": block,
+                        "to": new_val
+                    }
+
+    # 4️⃣ Corrections (e.g. "Ali not Hammad")
     correction = resolve_correction(user_text, semantic_svg)
     if correction:
         return correction
 
-    # 4️⃣ Partial numeric fixes (114 not 113)
+    # 5️⃣ Partial numeric fixes (114 not 113)
     if any(c.isdigit() for c in user_text) and "not" in t:
         return resolve_correction(user_text, semantic_svg)
 
-    # 5️⃣ Full replace (Only if it looks like raw content)
+    # 6️⃣ Full replace (Only if it looks like raw content)
     if looks_like_text_content(user_text):
         return resolve_full_replace(user_text, semantic_svg)
 
     return None
+
 def resolve_remove(user_text, semantic_svg):
     target_phrase = (
         user_text.lower()
@@ -435,7 +453,7 @@ def resolve_remove(user_text, semantic_svg):
         "to": ""
     }
 
-def resolve_correction(user_text, semantic_svg):
+    def resolve_correction(user_text, semantic_svg):
     parts = user_text.lower().split(" not ")
     if len(parts) != 2:
         return None
