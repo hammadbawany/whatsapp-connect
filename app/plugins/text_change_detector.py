@@ -59,38 +59,82 @@ def resolve_partial_text(old_value, user_text):
 # 1️⃣ SVG READER (MERGED FROM svg_text_reader.py)
 # ======================================================
 
+# app/plugins/text_change_detector.py
+
 def extract_svg_text_blocks(folder_path: str, caption: str):
     """
-    Reads SVG inside a Dropbox folder and extracts structured text blocks.
-
-    Naming rule:
-    PNG: <base>.png
-    SVG: <base> --- anything.svg
+    Reads SVG inside a Dropbox folder.
+    Robust Logic:
+    1. Clean caption (remove .png/.jpg explicitly, lowercase) -> Target Base.
+    2. Scan SVGs.
+    3. Clean SVG name (remove .svg, split at "---", lowercase).
+    4. Match.
     """
 
-    # --- Find SVG using PNG → SVG rule
-    png_base = caption.rsplit(".", 1)[0].strip()
-    svg_path = None
+    # 1️⃣ Clean the Caption (Remove Extension & Lowercase)
+    # Input: "1 - Envelope... .png" -> "1 - envelope..."
+    clean_caption = caption.strip()
+    lower_caption = clean_caption.lower()
+
+    if lower_caption.endswith(".png"):
+        target_base = lower_caption[:-4].strip()
+    elif lower_caption.endswith(".jpg"):
+        target_base = lower_caption[:-4].strip()
+    elif lower_caption.endswith(".jpeg"):
+        target_base = lower_caption[:-5].strip()
+    else:
+        # Fallback if no extension in caption
+        target_base = lower_caption
+
+    print(f"🎯 Text Detector searching for base: '{target_base}'")
 
     dbx = get_system_dropbox_client()
-    entries = dbx.files_list_folder(folder_path).entries
+    try:
+        entries = dbx.files_list_folder(folder_path).entries
+    except Exception as e:
+        raise Exception(f"Dropbox Error listing {folder_path}: {e}")
 
+    svg_path = None
+
+    # 2️⃣ Search Strategy 1: Exact Match on Base Name
     for entry in entries:
         if not entry.name.lower().endswith(".svg"):
             continue
 
-        svg_name_clean = entry.name.split("---")[0].strip()
+        # Clean Dropbox Name: "Name --- Qty.svg" -> "name"
+        # Remove extension
+        file_name_no_ext = entry.name.rsplit(".", 1)[0]
+        # Split at "---", take first part, lowercase, strip spaces
+        file_base = file_name_no_ext.split("---")[0].strip().lower()
 
-        if svg_name_clean == png_base:
+        if file_base == target_base:
             svg_path = entry.path_display
+            print(f"✅ EXACT MATCH FOUND: {entry.name}")
             break
 
+    # 3️⃣ Search Strategy 2: Loose Match (Fallback)
+    # If exact match failed (e.g. double space issue), check if target is IN filename
     if not svg_path:
+        print("⚠️ Exact match failed, attempting loose match...")
+        for entry in entries:
+            if not entry.name.lower().endswith(".svg"): continue
+
+            # Check if "1 - envelope..." is inside "1 - envelope... --- 13.svg"
+            if target_base in entry.name.lower():
+                svg_path = entry.path_display
+                print(f"✅ LOOSE MATCH FOUND: {entry.name}")
+                break
+
+    if not svg_path:
+        # Debugging aid: list what was actually there
+        available_files = [e.name for e in entries if e.name.endswith(".svg")]
         raise Exception(
-            f"SVG file not found for caption. Expected base: '{png_base}'"
+            f"SVG file not found for caption.\n"
+            f"Target Base: '{target_base}'\n"
+            f"Available SVGs: {available_files}"
         )
 
-    # --- Load SVG
+    # --- Load SVG ---
     svg_content = download_svg_to_memory(svg_path)
     tree = ET.parse(svg_content)
     root = tree.getroot()
@@ -123,7 +167,6 @@ def extract_svg_text_blocks(folder_path: str, caption: str):
             "text2_node": text2_node
         }
     }
-
 
 # ======================================================
 # 2️⃣ SEMANTIC NORMALIZER
