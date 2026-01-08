@@ -390,7 +390,11 @@ def webhook():
                     intent = detect_design_intent(text)
                     if intent == "unknown":
                         intent = "text_implicit" if looks_like_text_content(text) else "chat"
+# 🟢 TAG USER IF ANY AI INTENT DETECTED
+                    valid_ai_intents = ["layout", "typography", "color", "text", "text_implicit"]
 
+                    if intent in valid_ai_intents:
+                        add_contact_tag(phone, 7) # <--- Reusable function call
                     # -------------------------------
                     # 🚀 ROUTING
                     # -------------------------------
@@ -484,7 +488,7 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-    
+
             # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
@@ -4010,3 +4014,36 @@ def send_buttons(phone, text, buttons):
     }
 
     requests.post(url, headers=headers, json=payload)
+
+
+def add_contact_tag(phone, tag_id):
+    """
+    Reusable function to tag a contact.
+    Handles DB connection automatically.
+    """
+    try:
+        # Safety: Normalize phone first
+        clean_phone = normalize_phone(phone)
+        if not clean_phone:
+            return False
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # Insert safely (ignore duplicates)
+        cur.execute("""
+            INSERT INTO contact_tags (contact_phone, tag_id)
+            VALUES (%s, %s)
+            ON CONFLICT (contact_phone, tag_id) DO NOTHING
+        """, (clean_phone, tag_id))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"🏷️ Tagged {clean_phone} with ID {tag_id}")
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to tag user: {e}")
+        return False
