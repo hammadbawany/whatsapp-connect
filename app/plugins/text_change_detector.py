@@ -6,6 +6,7 @@
 # - Builds confirmation message
 # - DOES NOT edit SVG
 # ======================================================
+from app.plugins.text_llm_resolver import llm_resolve_text
 
 import xml.etree.ElementTree as ET
 from io import BytesIO
@@ -314,7 +315,7 @@ def looks_like_text_content(text):
 
     # 2. Ignore common approval words (Critical for Group 5)
     approval_words = [
-        "ok", "done", "yes", "perfect", "good", "nice", "thanks","okay" , 
+        "ok", "done", "yes", "perfect", "good", "nice", "thanks","okay" ,
         "confirmed", "confirm", "okay", "kardo", "kardayn", "han", "haan", "theek" ,"confirm"
     ]
     if t_lower in approval_words:
@@ -347,55 +348,65 @@ def looks_like_text_content(text):
 
 
 
+import re
+import copy
+from app.plugins.text_llm_resolver import llm_resolve_text
+
+
 def resolve_text_delta(user_text, semantic_svg):
+    """
+    Rule-based first.
+    If nothing matches → LLM fallback.
+    """
+
     t = user_text.lower().strip()
 
+    # --------------------------------------------------
     # 1️⃣ Explicit removals
+    # --------------------------------------------------
     if t.startswith(("remove", "delete")):
-        return resolve_remove(user_text, semantic_svg)
+        delta = resolve_remove(user_text, semantic_svg)
+        if delta:
+            return delta
 
-    # 2️⃣ Explicit "Change to" pattern
-    # Handles: "change name to Ali", "change to Ali", "make it Ali"
+    # --------------------------------------------------
+    # 2️⃣ Explicit "change to" patterns
+    # --------------------------------------------------
     if " to " in t:
         parts = t.split(" to ", 1)
         command_part = parts[0].strip()
         new_content = parts[1].strip()
 
-        # Check if start is a command
         if any(v in command_part for v in ["change", "make", "rename", "set", "write"]):
-            # If so, the part AFTER "to" is the new text
             return {
                 "action": "replace_block",
-                "target_block": "text2", # Default to Name block
+                "target_block": "text2",  # Default name block
                 "to": new_content
             }
 
-    # 3️⃣ Casing/Capitalization Commands (NEW)
-    # Handles: "make A capital", "capital A", "uppercase ali"
+    # --------------------------------------------------
+    # 3️⃣ Capitalization / casing
+    # --------------------------------------------------
     casing_keywords = ["capital", "upper", "small", "lower"]
     if any(k in t for k in casing_keywords):
         words = t.split()
-        # Find potential target word (ignore command words)
         ignore_list = ["make", "change", "text", "is", "the", "to", "it"] + casing_keywords
         candidates = [w for w in words if w not in ignore_list]
 
         if candidates:
             target_word = candidates[0]
 
-            # Find which block contains this word
             for block, value in semantic_svg.items():
-                if not value: continue
+                if not value:
+                    continue
 
-                # Check if target is inside this block value
                 if target_word.lower() in str(value).lower():
                     new_val = value
 
-                    # Apply Capitalization
                     if "capital" in t or "upper" in t:
                         pattern = re.compile(re.escape(target_word), re.IGNORECASE)
                         new_val = pattern.sub(target_word.upper(), value)
 
-                    # Apply Lowercase
                     elif "small" in t or "lower" in t:
                         pattern = re.compile(re.escape(target_word), re.IGNORECASE)
                         new_val = pattern.sub(target_word.lower(), value)
@@ -406,20 +417,57 @@ def resolve_text_delta(user_text, semantic_svg):
                         "to": new_val
                     }
 
-    # 4️⃣ Corrections (e.g. "Ali not Hammad")
+    # --------------------------------------------------
+    # 4️⃣ Corrections (Ali not Hammad)
+    # --------------------------------------------------
     correction = resolve_correction(user_text, semantic_svg)
     if correction:
         return correction
 
-    # 5️⃣ Partial numeric fixes (114 not 113)
+    # --------------------------------------------------
+    # 5️⃣ Numeric corrections (114 not 113)
+    # --------------------------------------------------
     if any(c.isdigit() for c in user_text) and "not" in t:
-        return resolve_correction(user_text, semantic_svg)
+        correction = resolve_correction(user_text, semantic_svg)
+        if correction:
+            return correction
 
-    # 6️⃣ Full replace (Only if it looks like raw content)
+    # --------------------------------------------------
+    # 6️⃣ Full replace (raw content)
+    # --------------------------------------------------
     if looks_like_text_content(user_text):
         return resolve_full_replace(user_text, semantic_svg)
 
-    return None
+    # ==================================================
+    # 🧠 7️⃣ LLM FALLBACK (ONLY IF RULES FAILED)
+    # ==================================================
+    llm_result = llm_resolve_text(
+        user_message=user_text,
+        current_text=semantic_svg
+    )
+
+    if llm_result.get("intent") != "text_change":
+        return None
+
+    if llm_result.get("confidence", 0) < 0.75:
+        return None
+    log_llm_decision(
+        conn=get_conn(),                 # reuse DB
+        phone=phone,
+        user_message=user_text,
+        before_text=semantic_svg,
+        after_text=llm_result["final_text"],
+        confidence=confidence,
+        reason=llm_result.get("reason", "llm_fallback")
+    )
+
+
+    # 🔴 IMPORTANT:
+    # LLM RETURNS FULL FINAL SEMANTIC SVG
+    return {
+        "action": "llm_full_replace",
+        "final_semantic_svg": llm_result["final_text"]
+    }
 
 def resolve_remove(user_text, semantic_svg):
     target_phrase = (
@@ -511,6 +559,14 @@ def resolve_full_replace(user_text, semantic_svg):
 
 
 def apply_delta(semantic_svg, delta):
+    """
+    Applies both rule-based deltas and LLM full replacements.
+    """
+
+    # 🧠 LLM FULL REPLACE
+    if delta.get("action") == "llm_full_replace":
+        return delta["final_semantic_svg"]
+
     svg = copy.deepcopy(semantic_svg)
 
     block = delta["target_block"]
