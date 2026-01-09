@@ -153,6 +153,7 @@ def get_current_user():
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
+    ai_handled = False
 
     # -----------------------------------------------------
     # 1️⃣ VERIFICATION
@@ -285,17 +286,7 @@ def webhook():
                 # -------------------------------------------------
                 # 🛑 HARD STOP — GENERIC CONFIRMATIONS (NO AI)
                 # -------------------------------------------------
-                GENERIC_CONFIRM_WORDS = {
-                    "ok", "okay", "done", "confirmed", "confirm",
-                    "yes", "approved", "perfect", "go ahead",
-                    "jee", "haan", "han", "theek", "sahi", "bhai"
-                }
 
-                lower_text = text.strip().lower()
-
-                if lower_text in GENERIC_CONFIRM_WORDS:
-                    print("🛑 GENERIC CONFIRMATION — STOPPING AI:", lower_text)
-                    continue
                 # -------------------------------------------------
                 # 🚦 STATE MACHINE — PENDING TEXT CONFIRMATION (TOP PRIORITY)
                 # -------------------------------------------------
@@ -355,8 +346,6 @@ def webhook():
                 # -------------------------------------------------
                 # 5️⃣ DESIGN CONFIRMATION (ORDER FINALIZATION)
                 # -------------------------------------------------
-                if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
-                    continue
 
                 # -------------------------------------------------
                 # 🧠 INTENT & ROUTING (UPDATED FOR FREE FLOAT)
@@ -412,7 +401,9 @@ def webhook():
                     ]
 
                     # Check if the message contains ANY of these words
-                    is_confirmation = any(k in text.lower() for k in CONFIRM_KEYWORDS)
+                    clean = text.lower().strip()
+
+                    is_confirmation = clean in CONFIRM_KEYWORDS
 
                     if intent == "unknown":
                         # If it's a confirmation word, force intent to 'chat' so it doesn't trigger text change
@@ -444,6 +435,7 @@ def webhook():
                         continue
 
                     elif intent in ["text", "text_implicit"]:
+
                         from app.plugins.text_change_detector import (
                             process_text_change_request,
                             resolve_text_delta,
@@ -463,6 +455,14 @@ def webhook():
                         semantic_svg = result["semantic_svg"]
 
                         delta = resolve_text_delta(text, semantic_svg)
+                        if not delta:
+                            print("ℹ️ No text delta detected — skipping AI")
+                            continue
+
+                        # ✅ NOW we know AI is actually doing something
+                        add_contact_tag(phone, 7)
+                        ai_handled = True
+
                         updated_svg = apply_delta(semantic_svg, delta) if delta else semantic_svg
 
                         # 🟢 SEND BUTTONS INSTEAD OF PLAIN TEXT
@@ -473,8 +473,8 @@ def webhook():
                             {"id": "edit_text", "title": "✏️ Edit"}
                         ]
 
+
                         send_buttons(phone, confirm_msg, buttons)
-                        add_contact_tag(phone, 7)
 
                         PENDING_TEXT_CONFIRMATIONS[phone] = {
                             "folder_path": result["folder_path"],
@@ -484,6 +484,9 @@ def webhook():
                         }
                         continue
 
+                    if not ai_handled and process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
+                        print("✅ DESIGN CONFIRMED — NO AI ACTION")
+                        continue
                 # -------------------------------------------------
                 # 🤖 FALLBACK AUTOMATION
                 # -------------------------------------------------
