@@ -282,7 +282,20 @@ def webhook():
                     context_whatsapp_id
                 ))
                 conn.commit()
+                # -------------------------------------------------
+                # 🛑 HARD STOP — GENERIC CONFIRMATIONS (NO AI)
+                # -------------------------------------------------
+                GENERIC_CONFIRM_WORDS = {
+                    "ok", "okay", "done", "confirmed", "confirm",
+                    "yes", "approved", "perfect", "go ahead",
+                    "jee", "haan", "han", "theek", "sahi", "bhai"
+                }
 
+                lower_text = text.strip().lower()
+
+                if lower_text in GENERIC_CONFIRM_WORDS:
+                    print("🛑 GENERIC CONFIRMATION — STOPPING AI:", lower_text)
+                    continue
                 # -------------------------------------------------
                 # 🚦 STATE MACHINE — PENDING TEXT CONFIRMATION (TOP PRIORITY)
                 # -------------------------------------------------
@@ -384,17 +397,32 @@ def webhook():
                             print(f"❌ [IMPLICIT] Error checking Dropbox: {e}")
 
                 # C. Process if Context Found
+                # C. Process if Context Found
                 if context_whatsapp_id and row:
                     reply_caption = row["message"]
 
                     intent = detect_design_intent(text)
-                    if intent == "unknown":
-                        intent = "text_implicit" if looks_like_text_content(text) else "chat"
-# 🟢 TAG USER IF ANY AI INTENT DETECTED
-                    valid_ai_intents = ["layout", "typography", "color", "text", "text_implicit"]
 
-                    if intent in valid_ai_intents:
-                        add_contact_tag(phone, 7) # <--- Reusable function call
+                    # 1. Define Confirmation Keywords (English + Roman Urdu)
+                    # This list catches: "Okay", "Confirm kardayn", "Confirmed han", "Done", "Print"
+                    CONFIRM_KEYWORDS = [
+                        "confirm", "ok", "okay", "done", "proceed", "print",
+                        "final", "lock", "good", "nice", "perfect", "yes",
+                        "theek", "sahi", "kardo", "kardayn", "han", "haan", "krden"
+                    ]
+
+                    # Check if the message contains ANY of these words
+                    is_confirmation = any(k in text.lower() for k in CONFIRM_KEYWORDS)
+
+                    if intent == "unknown":
+                        # If it's a confirmation word, force intent to 'chat' so it doesn't trigger text change
+                        if is_confirmation:
+                            intent = "chat"
+                        else:
+                            intent = "text_implicit" if looks_like_text_content(text) else "chat"
+                    # 🟢 TAG USER IF ANY AI INTENT DETECTED
+                    # 🟢 2. TAGGING LOGIC (FIXED)
+                    # Only add Tag 7 if it is a valid AI intent AND NOT a confirmation
                     # -------------------------------
                     # 🚀 ROUTING
                     # -------------------------------
@@ -408,11 +436,11 @@ def webhook():
                         if any(x in text.lower() for x in ["capital", "upper", "small", "lower", "case"]):
                             intent = "text" # Force routing to text handler
                         else:
-                            send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
+                            #send_text_internal(phone, "🎨 Font/style change detected. (Coming soon)")
                             continue
 
                     elif intent == "color":
-                        send_text_internal(phone, "🎨 Color change detected. (Coming soon)")
+                        #send_text_internal(phone, "🎨 Color change detected. (Coming soon)")
                         continue
 
                     elif intent in ["text", "text_implicit"]:
@@ -446,6 +474,7 @@ def webhook():
                         ]
 
                         send_buttons(phone, confirm_msg, buttons)
+                        add_contact_tag(phone, 7)
 
                         PENDING_TEXT_CONFIRMATIONS[phone] = {
                             "folder_path": result["folder_path"],

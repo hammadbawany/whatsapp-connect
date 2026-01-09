@@ -313,7 +313,10 @@ def looks_like_text_content(text):
         return False
 
     # 2. Ignore common approval words (Critical for Group 5)
-    approval_words = ["ok", "done", "yes", "perfect", "good", "nice", "thanks", "confirmed", "confirm"]
+    approval_words = [
+        "ok", "done", "yes", "perfect", "good", "nice", "thanks","okay" , 
+        "confirmed", "confirm", "okay", "kardo", "kardayn", "han", "haan", "theek" ,"confirm"
+    ]
     if t_lower in approval_words:
         return False
 
