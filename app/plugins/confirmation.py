@@ -1,181 +1,157 @@
 # app/plugins/confirmation.py
 
+import re
 import sys
-import requests
-import os
 
-def log(title, payload):
-    print(f"[CONFIRMATION] {title}: {payload}")
+def clog(msg):
+    print(f"[CONFIRMATION] {msg}", file=sys.stdout)
     sys.stdout.flush()
 
-def is_design_rejection(text: str):
-    """
-    Returns True if the text implies a correction, rejection, or cancellation.
-    """
-    t = text.lower().strip()
-    negatives = [
-        "cancel", "change", "correction", "wrong", "mistake",
-        "not approved", "not good", "bad", "issue", "error",
-        "stop", "refund", "return", "don't", "dont", "wait"
-    ]
-    return any(n in t for n in negatives)
 
-def is_design_confirmation(text: str):
-    """
-    Returns True if text implies approval.
-    Explicitly excludes 'confirm order' to avoid template button collisions.
-    """
-    t = text.lower().strip()
-
-    # 🚨 CRITICAL: Ignore "Confirm Order" button click text
-    if "confirm order" in t:
+# -------------------------------------------------
+# 🔍 HARD BLOCK: TEXT EDIT COMMANDS
+# -------------------------------------------------
+def is_text_edit_command(text: str) -> bool:
+    if not text:
         return False
+
+    t = text.lower().strip()
+
+    edit_starters = [
+        "change", "edit", "correct", "fix", "replace",
+        "make", "update", "remove", "delete", "rewrite",
+        "write", "set"
+    ]
+
+    return any(t.startswith(v) for v in edit_starters)
+
+
+# -------------------------------------------------
+# ❌ DESIGN REJECTION / CANCELLATION
+# -------------------------------------------------
+def is_design_rejection(text: str) -> bool:
+    if not text:
+        return False
+
+    t = text.lower().strip()
+
+    # 🚫 ABSOLUTE BLOCK — NEVER reject on edit commands
+    if is_text_edit_command(t):
+        return False
+
+    negative_phrases = [
+        "cancel",
+        "wrong",
+        "not approved",
+        "not good",
+        "bad",
+        "issue",
+        "error",
+        "problem",
+        "stop",
+        "refund",
+        "return",
+        "reject",
+        "dont like",
+        "do not like",
+        "no print",
+        "dont print"
+    ]
+
+    return any(p in t for p in negative_phrases)
+
+
+# -------------------------------------------------
+# ✅ DESIGN CONFIRMATION
+# -------------------------------------------------
+def is_design_confirmation(text: str) -> bool:
+    if not text:
+        return False
+
+    t = text.lower().strip()
 
     confirmations = [
-        "ok", "okay", "done", "confirmed", "confirm",
-        "approved", "perfect", "looks good", "this is fine",
-        "yes", "good", "final", "go ahead", "approve", "locked"
+        "confirm",
+        "confirmed",
+        "ok",
+        "okay",
+        "done",
+        "final",
+        "approved",
+        "perfect",
+        "print",
+        "go ahead",
+        "proceed",
+        "lock",
+
+        # Roman Urdu
+        "theek",
+        "sahi",
+        "haan",
+        "han",
+        "jee",
+        "kardo",
+        "kardain",
+        "krden"
     ]
 
-    # Exact match or substring match
-    return any(c == t or c in t for c in confirmations)
+    return t in confirmations
 
-def tag_whatsapp_chat_db(cur, conn, phone, tag_id):
-    """
-    Directly tags the chat in the DB (faster than calling the API endpoint).
-    """
-    try:
-        cur.execute("""
-            INSERT INTO contact_tags (contact_phone, tag_id)
-            VALUES (%s, %s)
-            ON CONFLICT (contact_phone, tag_id) DO NOTHING
-        """, (phone, tag_id))
-        conn.commit()
-        log("TAG APPLIED", f"Phone: {phone}, Tag: {tag_id}")
-    except Exception as e:
-        log("TAG ERROR", str(e))
 
+# -------------------------------------------------
+# 🧠 MAIN ENTRY — USED BY WEBHOOK
+# -------------------------------------------------
 def process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
     """
-    Main logic to handle design confirmations.
-    Returns: True if the message was a confirmation (handled), False otherwise.
+    Returns:
+        True  -> Confirmation or rejection handled
+        False -> Let AI / automation continue
     """
 
-    # 1. Check for REJECTION/CANCELLATION first
-    if is_design_rejection(text):
-        log("🛑 DESIGN REJECTION / CANCELLATION DETECTED", text)
-        # We return False so it can be processed as a normal message (agent sees the complaint)
+    if not text:
         return False
 
-    # 2. Check for CONFIRMATION words
-    if is_design_confirmation(text):
+    clean = text.lower().strip()
 
-        target_image_id = None
+    # 🚫 NEVER intercept text edits
+    if is_text_edit_command(clean):
+        clog(f"✏️ TEXT EDIT DETECTED — skipping confirmation: {text}")
+        return False
 
-        # -------------------------------------------------
-        # SCENARIO A: User Replied to a Specific Message
-        # -------------------------------------------------
-        if context_whatsapp_id:
-            # Fetch details of the AGENT message being replied to
+    # ❌ REJECTION
+    if is_design_rejection(clean):
+        clog(f"🛑 DESIGN REJECTION / CANCELLATION DETECTED: {text}")
+
+        try:
             cur.execute("""
-                SELECT id, media_type, message, template_name
-                FROM messages
-                WHERE whatsapp_id = %s
-            """, (context_whatsapp_id,))
-            replied_msg = cur.fetchone()
-
-            if replied_msg:
-                # 🛑 IGNORE if replying to Order Confirmation Template
-                # If template_name exists OR message text looks like an order summary
-                msg_body = str(replied_msg.get('message', '')).lower()
-                if replied_msg.get('template_name') or "order number" in msg_body:
-                    log("⚠️ User replied 'confirm' to an Order - IGNORING DESIGN TAG", text)
-                    return False
-
-                # ✅ CASE: Replying directly to an IMAGE
-                if replied_msg['media_type'] == 'image':
-                    target_image_id = context_whatsapp_id
-
-                # ✅ CASE: Replying to the "Please confirm text..." text message
-                # We assume the image associated with this text is the LAST image sent before this text.
-                elif "confirm text and design" in msg_body:
-                    cur.execute("""
-                        SELECT whatsapp_id
-                        FROM messages
-                        WHERE user_phone = %s
-                          AND sender = 'agent'
-                          AND media_type = 'image'
-                          AND id < %s  -- Image must be sent BEFORE the text prompt
-                        ORDER BY id DESC
-                        LIMIT 1
-                    """, (phone, replied_msg['id']))
-                    prev_img = cur.fetchone()
-                    if prev_img:
-                        target_image_id = prev_img['whatsapp_id']
-
-        # -------------------------------------------------
-        # SCENARIO B: No Context (Direct Message)
-        # -------------------------------------------------
-        else:
-            # Fetch the VERY LAST message sent by the AGENT
-            cur.execute("""
-                SELECT id, media_type, message, template_name, whatsapp_id
-                FROM messages
-                WHERE user_phone = %s AND sender = 'agent'
-                ORDER BY id DESC
-                LIMIT 1
-            """, (phone,))
-            last_agent_msg = cur.fetchone()
-
-            if last_agent_msg:
-                msg_body = str(last_agent_msg.get('message', '')).lower()
-
-                # 🛑 IGNORE if last message was Order Template
-                if last_agent_msg.get('template_name') or "order number" in msg_body:
-                    log("⚠️ Last agent msg was Template - Ignoring 'No Context' Confirm", text)
-                    return False
-
-                # ✅ CASE: Last message was an IMAGE
-                if last_agent_msg['media_type'] == 'image':
-                    target_image_id = last_agent_msg['whatsapp_id']
-
-                # ✅ CASE: Last message was "Please confirm text..."
-                elif "confirm text and design" in msg_body:
-                    cur.execute("""
-                        SELECT whatsapp_id
-                        FROM messages
-                        WHERE user_phone = %s
-                          AND sender = 'agent'
-                          AND media_type = 'image'
-                          AND id < %s
-                        ORDER BY id DESC
-                        LIMIT 1
-                    """, (phone, last_agent_msg['id']))
-                    prev_img = cur.fetchone()
-                    if prev_img:
-                        target_image_id = prev_img['whatsapp_id']
-
-        # -------------------------------------------------
-        # EXECUTE CONFIRMATION
-        # -------------------------------------------------
-        if target_image_id:
-            cur.execute("""
-                UPDATE messages
-                SET is_confirmed = TRUE,
-                                    confirmed_at = NOW()
-                WHERE whatsapp_id = %s
-            """, (target_image_id,))
-
+                INSERT INTO design_confirmations (
+                    phone,
+                    status,
+                    reason
+                ) VALUES (%s, %s, %s)
+            """, (phone, "rejected", text))
             conn.commit()
+        except Exception as e:
+            clog(f"DB ERROR (rejection): {e}")
 
-            # Add Tag 5 (Confirmed)
-            tag_whatsapp_chat_db(cur, conn, phone, tag_id=5)
+        return True
 
-            log("✅ DESIGN CONFIRMED & TAGGED", {
-                "phone": phone,
-                "trigger": text,
-                "image_wamid": target_image_id
-            })
-            return True
+    # ✅ CONFIRMATION
+    if is_design_confirmation(clean):
+        clog(f"✅ DESIGN CONFIRMED: {text}")
 
+        try:
+            cur.execute("""
+                INSERT INTO design_confirmations (
+                    phone,
+                    status
+                ) VALUES (%s, %s)
+            """, (phone, "confirmed"))
+            conn.commit()
+        except Exception as e:
+            clog(f"DB ERROR (confirmation): {e}")
+
+        return True
+
+    # 🤷 Not confirmation, not rejection
     return False
