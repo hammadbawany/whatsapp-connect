@@ -387,7 +387,7 @@ def resolve_text_delta(user_text, semantic_svg):
     # --------------------------------------------------
     # 3️⃣ Capitalization / casing
     # --------------------------------------------------
-    casing_keywords = ["capital", "upper", "small", "lower"]
+    casing_keywords = ["capital", "upper", "small", "lower", "chota", "bara"]
     if any(k in t for k in casing_keywords):
         words = t.split()
         ignore_list = ["make", "change", "text", "is", "the", "to", "it"] + casing_keywords

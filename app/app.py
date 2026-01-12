@@ -410,12 +410,16 @@ def webhook():
                     """, (context_whatsapp_id,))
                     row = cur.fetchone()
 
+
+
+
                 # =====================================================
                 # 🧠 INTENT & AI
                 # =====================================================
                 if row:
                     reply_caption = row["message"]
                     intent = detect_design_intent(text)
+                    print(f"🧠 Detected Intent: {intent}")
 
                     if intent in ["text", "text_implicit"]:
                         from app.plugins.text_change_detector import (
@@ -424,6 +428,17 @@ def webhook():
                             apply_delta,
                             build_confirmation_message
                         )
+
+                    # 🟢 ADD THIS BLOCK FOR FONTS & COLORS
+                    elif intent in ["typography", "color"]:
+                        print(f"🎨 Manual Design Request detected: {text}")
+
+                        # Tag user for human review (Ensure Tag ID 9 exists in DB)
+                        add_contact_tag(phone, 9)
+
+                        # Send the auto-reply
+                        send_text_internal(phone, "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly.")
+                        continue
 
                         result = process_text_change_request(
                             phone=phone,
@@ -3931,39 +3946,44 @@ def external_send_shipment():
 def detect_design_intent(text):
     t = text.lower()
 
+    # 1. Layout
     layout_keywords = [
-        "move", "left", "right", "center", "centre",
-        "align", "top", "bottom", "up", "down",
-        "corner", "side", "position"
+        "move", "left", "right", "center", "centre", "align",
+        "top", "bottom", "up", "down", "corner", "side", "position",
+        "overlap", "separat", "space", "fasla" # Roman Urdu for distance
     ]
 
+    # 2. Typography (Fonts/Size)
     typography_keywords = [
-        "font", "size", "bigger", "smaller", "bold",
-        "thin", "capital", "uppercase", "lowercase"
+        "font", "size", "bigger", "smaller", "bold", "thin",
+        "readable", "clear", "bara" # 'bara' usually implies size unless specific to text
     ]
 
+    # 3. Color
     color_keywords = [
-        "color", "colour", "red", "gold", "golden",
-        "black", "white", "blue", "green",
-        "shade", "light", "dark"
+        "color", "colour", "red", "gold", "golden", "black", "white",
+        "blue", "green", "shade", "light", "dark", "colorless"
     ]
 
+    # 4. Text Content
     text_change_keywords = [
-        "change name", "replace", "write", "spell",
-        "correct", "rename"
+        "change", "edit", "replace", "write", "spell", "correct",
+        "rename", "add", "remove", "delete", "text", "spelling",
+        "likhna", "likh", "naam", "name", # Roman Urdu
+               # Casing keywords moved here:
+        "capital", "uppercase", "upper", "lowercase", "lower", "small", "chota"
     ]
 
-    if any(k in t for k in layout_keywords):
-        return "layout"
+    # 5. Quality/Issues (New)
+    issue_keywords = [
+        "blurry", "bad", "jumbled", "wrong", "mistake", "issue", "problem"
+    ]
 
-    if any(k in t for k in typography_keywords):
-        return "typography"
-
-    if any(k in t for k in color_keywords):
-        return "color"
-
-    if any(k in t for k in text_change_keywords):
-        return "text"
+    if any(k in t for k in layout_keywords): return "layout"
+    if any(k in t for k in typography_keywords): return "typography"
+    if any(k in t for k in color_keywords): return "color"
+    if any(k in t for k in issue_keywords): return "color" # Route issues to same manual bucket
+    if any(k in t for k in text_change_keywords): return "text"
 
     return "unknown"
 
