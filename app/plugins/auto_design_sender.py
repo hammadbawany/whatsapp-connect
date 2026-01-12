@@ -240,17 +240,24 @@ def send_text_via_meta_and_db(phone, text):
 # ====================================================
 
 def run_scheduled_automation():
-    from app import PENDING_DESIGN_CONFIRMATION  # Import here to avoid circular imports
+    from app import PENDING_DESIGN_CONFIRMATION  # avoid circular import
 
-    if os.getenv("ENABLE_CRON") != "true": return
+    print("\n🔥🔥🔥 CRON TICK START 🔥🔥🔥", datetime.utcnow(), flush=True)
 
-    print(f"\n⏰ [CRON] Starting Auto Design Check: {datetime.utcnow()}")
+    if os.getenv("ENABLE_CRON") != "true":
+        print("❌ ENABLE_CRON is not true → exiting", flush=True)
+        return
+
     init_log_table()
 
     dbx = get_system_dropbox_client()
-    if not dbx: return
+    if not dbx:
+        print("❌ Dropbox client not available", flush=True)
+        return
 
-    # 1. Scan
+    # ====================================================
+    # 1️⃣ SCAN DROPBOX
+    # ====================================================
     all_folders = []
     for path in TARGET_PATHS:
         try:
@@ -259,112 +266,201 @@ def run_scheduled_automation():
             while res.has_more:
                 res = dbx.files_list_folder_continue(res.cursor)
                 all_folders.extend(res.entries)
-        except: pass
+        except Exception as e:
+            print("❌ Dropbox scan failed:", e, flush=True)
 
     folder_metas = [e for e in all_folders if isinstance(e, dropbox.files.FolderMetadata)]
+    print(f"📁 Total folders found: {len(folder_metas)}", flush=True)
+    print("📁 Folder names:", [f.name for f in folder_metas], flush=True)
 
-    # 2. Filter & Check DB
+    # ====================================================
+    # 2️⃣ PARSE & FILTER
+    # ====================================================
     candidates = []
     all_phones = set()
 
     for folder in folder_metas:
+        print("\n🔍 CHECKING FOLDER:", folder.name, flush=True)
+
         name_lower = folder.name.lower()
-        if "incomplete" in name_lower: continue
-        if any(ign in name_lower for ign in IGNORED_FOLDERS): continue
+
+        if "incomplete" in name_lower:
+            print("⏭ Skipped: contains 'incomplete'", flush=True)
+            continue
+
+        if any(ign in name_lower for ign in IGNORED_FOLDERS):
+            print("⏭ Skipped: ignored keyword", flush=True)
+            continue
 
         d = parse_folder_name(folder.name)
-        d['full_path'] = folder.path_lower
-        d['display_path'] = folder.path_display
+        d["full_path"] = folder.path_lower
+        d["display_path"] = folder.path_display
 
-        if d['phones']:
-            candidates.append(d)
-            for p in d['phones']: all_phones.add(short_pk(p))
+        print("📦 Parsed folder:", d, flush=True)
 
+        if not d["phones"]:
+            print("⏭ Skipped: no phone detected", flush=True)
+            continue
 
+        candidates.append(d)
+        for p in d["phones"]:
+            all_phones.add(normalize_phone(p))
+
+    print("📞 Phones detected in folders:", all_phones, flush=True)
+
+    # ====================================================
+    # 3️⃣ FETCH CUSTOMER REPLIES
+    # ====================================================
     responded_set = set()
     sent_set = set()
 
     if all_phones:
-        conn = get_conn(); cur = conn.cursor()
-        chk = list(all_phones)
-        fmt = ','.join(['%s']*len(chk))
-        cur.execute(f"SELECT DISTINCT RIGHT(user_phone, 10) as short_phone FROM messages WHERE sender='customer' AND RIGHT(user_phone, 10) IN ({fmt})", tuple(chk))
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT DISTINCT user_phone
+            FROM messages
+            WHERE sender = 'customer'
+              AND user_phone = ANY(%s)
+            """,
+            (list(all_phones),)
+        )
+
         for r in cur.fetchall():
-            val = r['short_phone'] if isinstance(r, dict) else r[0]
-            responded_set.add(val)
+            responded_set.add(r[0])
 
         cur.execute("SELECT folder_name FROM design_sent_log")
         for r in cur.fetchall():
-            val = r['folder_name'] if isinstance(r, dict) else r[0]
-            sent_set.add(val)
-        cur.close(); conn.close()
+            sent_set.add(r[0])
 
-    # 3. Process
+        cur.close()
+        conn.close()
+
+    print("💬 Phones with customer replies:", responded_set, flush=True)
+    print("📤 Already sent folders:", sent_set, flush=True)
+
+    # ====================================================
+    # 4️⃣ PROCESS CANDIDATES
+    # ====================================================
     for item in candidates:
-        if item['folder_name'] in sent_set: continue
+        print("\n🚦 EVALUATING:", item["folder_name"], flush=True)
 
-        active_phone = item['phones'][0]
+        if item["folder_name"] in sent_set:
+            print("⏭ Skipped: already sent", flush=True)
+            continue
+
+        active_phone = normalize_phone(item["phones"][0])
         has_replied = False
-        for p in item['phones']:
-            if p[-10:] in responded_set:
-                active_phone = p
+
+        for p in item["phones"]:
+            np = normalize_phone(p)
+            if np in responded_set:
+                active_phone = np
                 has_replied = True
                 break
 
-        is_wa = "whatsapp" in item['source'].lower()
-        if not (is_wa or has_replied): continue
+        is_wa = "whatsapp" in item["source"].lower()
 
-        # 🔥 LOCKING
-        if not attempt_to_claim_folder(item['folder_name'], active_phone, method='cron'):
+        print(
+            f"📊 Decision → source={item['source']} | "
+            f"is_wa={is_wa} | has_replied={has_replied} | phone={active_phone}",
+            flush=True
+        )
+
+        if not (is_wa or has_replied):
+            print("⛔ SKIPPED: no customer reply yet", flush=True)
+            continue
+
+        # ====================================================
+        # 🔒 LOCK
+        # ====================================================
+        if not attempt_to_claim_folder(item["folder_name"], active_phone, method="cron"):
+            print("⛔ SKIPPED: lock already taken", flush=True)
             continue
 
         try:
-            files = dbx.files_list_folder(item['display_path']).entries
-            pngs = [f for f in files if isinstance(f, dropbox.files.FileMetadata) and f.name.lower().endswith('.png')]
+            print("📂 Listing files in:", item["display_path"], flush=True)
+            files = dbx.files_list_folder(item["display_path"]).entries
+            pngs = [
+                f for f in files
+                if isinstance(f, dropbox.files.FileMetadata)
+                and f.name.lower().endswith(".png")
+            ]
+
+            print("🖼 PNG files found:", [f.name for f in pngs], flush=True)
 
             if not pngs:
-                release_lock_if_safe(item['folder_name'], False) # Release lock if empty
+                print("⛔ No PNGs found", flush=True)
+                release_lock_if_safe(item["folder_name"], False)
                 continue
 
-            # Time Check (5 mins)
-            should_send = False
             now = datetime.utcnow()
-            for png in pngs:
-                if (now - png.server_modified) > timedelta(minutes=5):
-                    should_send = True; break
+            should_send = any((now - f.server_modified) > timedelta(minutes=5) for f in pngs)
 
             if not should_send:
-                release_lock_if_safe(item['folder_name'], False) # Release lock to try later
+                print("⏳ PNGs too new, waiting", flush=True)
+                release_lock_if_safe(item["folder_name"], False)
                 continue
 
-            print(f"🚀 [CRON] Sending '{item['folder_name']}'")
+            print("🚀 SENDING DESIGNS...", flush=True)
+
             sent_any = False
             for i, f in enumerate(pngs):
-                if i > 0: time.sleep(15)
+                if i > 0:
+                    time.sleep(15)
+
                 _, res = dbx.files_download(f.path_lower)
                 caption = os.path.splitext(f.name)[0]
-                send_file_via_meta_and_db(active_phone, res.content, f.name, "image/png", caption)
+
+                send_file_via_meta_and_db(
+                    active_phone,
+                    res.content,
+                    f.name,
+                    "image/png",
+                    caption
+                )
+
                 sent_any = True
 
             if sent_any:
-                send_text_via_meta_and_db(active_phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
-                update_sent_status(item['folder_name'], f"{len(pngs)} files", method='cron')
-                move_folder_after_sending(dbx, item['display_path'], item['folder_name'])
+                send_text_via_meta_and_db(
+                    active_phone,
+                    "Please confirm text and design.\n"
+                    "No changes will be made after confirmation.\n"
+                    "Reply on image for corrections."
+                )
 
-                # ✅ CORRECTED: Using normalize_phone
-                PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
+                update_sent_status(
+                    item["folder_name"],
+                    f"{len(pngs)} files",
+                    method="cron"
+                )
+
+                print("📦 MOVING FOLDER...", flush=True)
+                move_folder_after_sending(
+                    dbx,
+                    item["display_path"],
+                    item["folder_name"]
+                )
+
+                PENDING_DESIGN_CONFIRMATION[active_phone] = {
                     "ts": time.time(),
                     "source": "auto_design_prompt"
                 }
 
+                print("✅ SUCCESS FULLY SENT & MOVED", flush=True)
+
             else:
-                release_lock_if_safe(item['folder_name'], False)
+                print("❌ Nothing sent", flush=True)
+                release_lock_if_safe(item["folder_name"], False)
 
         except Exception as e:
-            print(f"❌ [CRON ERROR] {item['folder_name']}: {e}")
-            release_lock_if_safe(item['folder_name'], False)
+            print("❌ CRON ERROR:", e, flush=True)
+            release_lock_if_safe(item["folder_name"], False)
 
-    print(f"✅ [CRON] Finished Cycle")
+    print("✅ CRON CYCLE COMPLETE", flush=True)
 
 # ====================================================
 # 5. ROUTES
