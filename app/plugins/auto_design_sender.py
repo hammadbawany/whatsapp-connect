@@ -329,7 +329,8 @@ def run_scheduled_automation():
 
         cur.execute("SELECT folder_name FROM design_sent_log")
         for r in cur.fetchall():
-            sent_set.add(r[0])
+            val = r[0] if not isinstance(r, dict) else list(r.values())[0]
+            sent_set.add(val)
 
         cur.close()
         conn.close()
