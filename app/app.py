@@ -1026,7 +1026,7 @@ if os.environ.get("ENABLE_CRON") == "true":
 
             scheduler = BackgroundScheduler()
             # Run every 5 minutes
-            scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=5)
+            scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=1)
             scheduler.start()
 
             # Shut down scheduler when app exits
@@ -3275,12 +3275,6 @@ def external_send_order():
         # =====================================================
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-        INSERT INTO contact_tags (contact_phone, tag_id)
-        VALUES (%s, %s)
-        ON CONFLICT DO NOTHING
-        """, (phone, 1))
-
         cur.execute("""
             SELECT id, phone_number_id, access_token
             FROM whatsapp_accounts
