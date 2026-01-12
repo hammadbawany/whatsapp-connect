@@ -164,11 +164,10 @@ def webhook():
     # 1️⃣ VERIFICATION
     # -----------------------------------------------------
     if request.method == "GET":
+        print("\n🔥🔥🔥 WEBHOOK Get HIT 🔥🔥🔥")
+        sys.stdout.flush()
         VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
-        if (
-            request.args.get("hub.mode") == "subscribe"
-            and request.args.get("hub.verify_token") == VERIFY_TOKEN
-        ):
+        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
         return "Verification failed", 403
 
@@ -176,327 +175,205 @@ def webhook():
     # 2️⃣ INCOMING EVENTS (POST)
     # -----------------------------------------------------
     try:
-        data = json.loads(request.get_data(as_text=True))
+        # RAW LOGGING
+        raw_data = request.get_data(as_text=True)
+        # print(f"\n🔥🔥🔥 RAW WEBHOOK:\n{raw_data}\n", file=sys.stdout)
 
+        data = json.loads(raw_data)
         entry = data.get("entry", [])
-        if not entry:
-            return "OK", 200
-
+        if not entry: return "OK", 200
         changes = entry[0].get("changes", [])
-        if not changes:
-            return "OK", 200
-
+        if not changes: return "OK", 200
         value = changes[0].get("value", {})
 
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # -------------------------------------------------
-        # 🟢 FORCE TARGET WABA ID
-        # -------------------------------------------------
-        cur.execute(
-            "SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1",
-            (TARGET_WABA_ID,)
-        )
+        # Force Target WABA
+        cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
         account_row = cur.fetchone()
         if not account_row:
             cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
             account_row = cur.fetchone()
-
         whatsapp_account_id = account_row["id"] if account_row else None
 
-        # -------------------------------------------------
-        # 3️⃣ CAPTURE CONTACT NAME
-        # -------------------------------------------------
+        # Capture Contact
         contacts_data = value.get("contacts", [])
         if contacts_data:
             c = contacts_data[0]
             try:
-                cur.execute("""
-                    INSERT INTO contacts (phone, name)
-                    VALUES (%s, %s)
-                    ON CONFLICT (phone)
-                    DO UPDATE SET name = EXCLUDED.name
-                """, (
-                    c.get("wa_id"),
-                    c.get("profile", {}).get("name")
-                ))
-            except Exception:
-                pass
+                cur.execute("INSERT INTO contacts (phone, name) VALUES (%s, %s) ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name", (c.get("wa_id"), c.get("profile", {}).get("name")))
+            except: pass
 
         # -------------------------------------------------
         # 4️⃣ PROCESS MESSAGES
         # -------------------------------------------------
         for msg in value.get("messages", []):
             try:
-                phone = msg.get("from")
-                phone = normalize_phone(phone)
+                phone = normalize_phone(msg.get("from"))
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
-                context_whatsapp_id = msg.get("context", {}).get("id")
+
+                # 🟢 CONTEXT CAPTURE
+                context_whatsapp_id = None
+                if msg.get("context"):
+                    context_whatsapp_id = msg.get("context", {}).get("id")
+                    print(f"🔗 [CONTEXT] Reply to ID: {context_whatsapp_id}")
+
+                print(f"\n📨 [WEBHOOK] New Message from {phone} | Type: {msg_type}")
 
                 # Ensure contact exists
-                cur.execute(
-                    "INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING",
-                    (phone,)
-                )
+                cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
 
                 # =====================================================
                 # 🟡 MEDIA (IMAGE / VOICE / VIDEO / DOC / STICKER)
                 # =====================================================
                 if msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
                     media_obj = msg.get(msg_type, {})
-                    media_id = media_obj.get("id")
-                    caption = media_obj.get("caption", "")
-
-                    if media_id:
-                        cur.execute("""
-                            INSERT INTO messages (
-                                whatsapp_account_id,
-                                user_phone,
-                                sender,
-                                media_type,
-                                media_id,
-                                message,
-                                whatsapp_id,
-                                context_whatsapp_id,
-                                status,
-                                timestamp
-                            )
-                            VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())
-                        """, (
-                            whatsapp_account_id,
-                            phone,
-                            msg_type,
-                            media_id,
-                            caption,
-                            wa_id,
-                            context_whatsapp_id
-                        ))
-                        conn.commit()
-
-                    continue  # 🚫 NO AI FOR MEDIA
-
-                # =====================================================
-                # 🟢 TEXT / BUTTON / INTERACTIVE (UNIFIED)
-                # =====================================================
-                text = ""
-
-                if msg_type == "text":
-                    text = msg.get("text", {}).get("body", "")
-
-                elif msg_type == "interactive":
-                    i = msg.get("interactive", {})
-                    if i.get("type") == "button_reply":
-                        text = i.get("button_reply", {}).get("title", "")
-                    elif i.get("type") == "list_reply":
-                        text = i.get("list_reply", {}).get("title", "")
-
-                elif msg_type == "button":
-                    text = msg.get("button", {}).get("text", "")
-
-                if not text:
+                    cur.execute("""
+                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp)
+                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())
+                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
+                    conn.commit()
                     continue
 
-                # Save message
+                # =====================================================
+                # 🟢 TEXT / INTERACTIVE / BUTTON
+                # =====================================================
+                text = ""
+                if msg_type == "text": text = msg.get("text", {}).get("body", "")
+                elif msg_type == "interactive":
+                    i = msg.get("interactive", {})
+                    text = i.get("button_reply", {}).get("title", "") or i.get("list_reply", {}).get("title", "")
+                elif msg_type == "button": text = msg.get("button", {}).get("text", "")
+
+                if not text: continue
+
+                # Save Message
                 cur.execute("""
-                    INSERT INTO messages (
-                        whatsapp_account_id,
-                        user_phone,
-                        sender,
-                        message,
-                        whatsapp_id,
-                        context_whatsapp_id,
-                        status,
-                        timestamp
-                    )
+                    INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp)
                     VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
-                """, (
-                    whatsapp_account_id,
-                    phone,
-                    text,
-                    wa_id,
-                    context_whatsapp_id
-                ))
+                """, (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id))
                 conn.commit()
 
                 lower = text.lower().strip()
 
+                # 🔍 Fetch Context Message (The Agent Message user replied to)
+                row = None
+                if context_whatsapp_id:
+                    cur.execute("SELECT message FROM messages WHERE whatsapp_id = %s AND sender = 'agent'", (context_whatsapp_id,))
+                    row = cur.fetchone()
 
-                # =====================================================
-                # ✅ DESIGN CONFIRMATION (STRICT MODE)
-                # =====================================================
-                if phone in PENDING_DESIGN_CONFIRMATION:
-
-                    pending = PENDING_DESIGN_CONFIRMATION[phone]
-                    print(f"🕵️ [CONFIRMATION DEBUG] Checking phone: {phone} | Text: '{text}'")
-
-                    # ⏱ TTL CHECK
-                    if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
-                        print(f"❌ [CONFIRMATION DEBUG] TTL Expired for {phone}")
-                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                        # Let it flow to automation if expired
-                    else:
-                        # 🔍 Context Debugging
-                        if context_whatsapp_id:
-                            print(f"ℹ️ [CONFIRMATION DEBUG] Context ID present: {context_whatsapp_id}")
+                # -----------------------------------------------------
+                # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS
+                # -----------------------------------------------------
+                if phone in PENDING_TEXT_CONFIRMATIONS:
+                    pending = PENDING_TEXT_CONFIRMATIONS[phone]
+                    if pending.get("source") == "text_edit":
+                        if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
+                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
                         else:
-                            print(f"ℹ️ [CONFIRMATION DEBUG] No Context ID (Keyword Check)")
+                            # User says "Yes/Confirm" to the new text preview
+                            if lower in {"confirm", "confirmed", "✅ confirm"}:
+                                PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                                payload = {
+                                    "action": "text_change", "source": "whatsapp", "folder_path": pending["folder_path"],
+                                    "final_text": pending["semantic_svg"], "target_block": pending["target_block"], "phone": phone
+                                }
+                                requests.post(f"{APP_BASE_URL}/api/design/action", json=payload, timeout=15)
+                                send_text_internal(phone, "✅ Applying changes now.")
+                                continue
+                            # User says "No/Edit" to the preview
+                            elif lower in {"edit", "change text", "no"}:
+                                PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                                send_text_internal(phone, "✏️ Please send the correct text.")
+                                continue
 
-                        # ⚡ UNIFIED CHECK (The Fix)
-                        # We do NOT manually check keywords here. We let the plugin do the cleaning & matching.
-                        # This allows "Done 👍🏻", "Yes confirmed", etc. to pass.
+                # -----------------------------------------------------
+                # 🧠 2. PRIORITY: INTENT DETECTION (EDITING)
+                # -----------------------------------------------------
+                intent = detect_design_intent(text)
+                print(f"🧠 [INTENT] Detected: {intent}")
 
+                # Execute if context exists OR user is in pending confirmation state
+                if row or (phone in PENDING_DESIGN_CONFIRMATION):
+
+                    # A. TEXT CHANGES (Automated)
+                    if intent in ["text", "text_implicit"]:
+                        print("▶️ [FLOW] Text Change Logic Started...")
+                        from app.plugins.text_change_detector import process_text_change_request, resolve_text_delta, apply_delta, build_confirmation_message
+
+                        reply_msg = row["message"] if row else ""
+                        result = process_text_change_request(phone=phone, customer_text=text, reply_caption=reply_msg)
+
+                        if result:
+                            delta = resolve_text_delta(text, result["semantic_svg"])
+                            if delta:
+                                print(f"   ✅ Delta Found: {delta}")
+                                add_contact_tag(phone, 7)
+                                ai_handled = True
+                                updated_svg = apply_delta(result["semantic_svg"], delta)
+                                confirm_msg = build_confirmation_message(updated_svg)
+                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "✅ Confirm"}, {"id": "edit_text", "title": "✏️ Edit"}])
+
+                                PENDING_TEXT_CONFIRMATIONS[phone] = {
+                                    "source": "text_edit", "folder_path": result["folder_path"],
+                                    "semantic_svg": updated_svg, "target_block": result["target_block"], "ts": time.time()
+                                }
+                                continue
+
+                    # B. MANUAL EDITS (Typography, Color, Design Swap)
+                    elif intent in ["typography", "color", "design_swap"]:
+                        print(f"🎨 Manual Request ({intent}). Tagging Agent.")
+                        add_contact_tag(phone, 9)
+                        if intent == "design_swap":
+                            send_text_internal(phone, "🔄 I've noted you want to change the design or add items. An agent will help you shortly.")
+                        else:
+                            send_text_internal(phone, "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly.")
+                        continue
+
+                    # C. LAYOUT (Semi-Automated)
+                    elif intent == "layout":
+                        print("▶️ [FLOW] Layout Change detected.")
+                        from app.plugins.design_reply_editor import handle_design_reply
+                        success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
+                        if success:
+                            send_text_internal(phone, "🔄 Adjusting the layout for you...")
+                        else:
+                            add_contact_tag(phone, 9)
+                            send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
+                        continue
+
+                # -----------------------------------------------------
+                # ✅ 3. PRIORITY: DESIGN CONFIRMATION
+                # -----------------------------------------------------
+                if phone in PENDING_DESIGN_CONFIRMATION:
+                    print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
+                    pending = PENDING_DESIGN_CONFIRMATION[phone]
+
+                    if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
+                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                    else:
                         is_handled = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
-
                         if is_handled:
-                            print(f"✅ [CONFIRMATION DEBUG] Confirmed/Rejected. Tagging user {phone} with ID 5")
-                            add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+                            print(f"   ✅ Confirmed! Tagging ID 5.")
+                            add_contact_tag(phone, 5)
                             PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                             continue
 
-                        print(f"⚪ [CONFIRMATION DEBUG] Text '{text}' was not a confirmation. Checking next...")
-
-                # =====================================================
-                # 🚦 PENDING TEXT CONFIRMATION
-                # =====================================================
-                if phone in PENDING_TEXT_CONFIRMATIONS:
-                    pending = PENDING_TEXT_CONFIRMATIONS[phone]
-
-                    if pending.get("source") != "text_edit":
-                        continue
-
-                    if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
-                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                        send_text_internal(phone, "⏰ Request expired.")
-                        continue
-
-                    if lower in {"confirm", "confirmed", "✅ confirm"}:
-                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-
-                        payload = {
-                            "action": "text_change",
-                            "source": "whatsapp",
-                            "folder_path": pending["folder_path"],
-                            "final_text": pending["semantic_svg"],
-                            "target_block": pending["target_block"],
-                            "phone": phone
-                        }
-
-                        debug_lifafay_payload(payload)
-
-                        requests.post(
-                            f"{APP_BASE_URL}/api/design/action",
-                            json=payload,
-                            timeout=15
-                        )
-
-                        send_text_internal(phone, "✅ Applying changes now.")
-                        continue
-
-                    if lower in {"edit", "change text", "no"}:
-                        PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                        send_text_internal(phone, "✏️ Please send the correct text.")
-                        continue
-
-                # =====================================================
-                # 🧠 CONTEXT LOOKUP
-                # =====================================================
-                row = None
-                if context_whatsapp_id:
-                    cur.execute("""
-                        SELECT message FROM messages
-                        WHERE whatsapp_id = %s AND sender = 'agent'
-                    """, (context_whatsapp_id,))
-                    row = cur.fetchone()
-
-
-
-
-                # =====================================================
-                # 🧠 INTENT & AI
-                # =====================================================
-                if row:
-                    reply_caption = row["message"]
-                    intent = detect_design_intent(text)
-                    print(f"🧠 Detected Intent: {intent}")
-
-                    if intent in ["text", "text_implicit"]:
-                        from app.plugins.text_change_detector import (
-                            process_text_change_request,
-                            resolve_text_delta,
-                            apply_delta,
-                            build_confirmation_message
-                        )
-
-                    # 🟢 ADD THIS BLOCK FOR FONTS & COLORS
-                    elif intent in ["typography", "color"]:
-                        print(f"🎨 Manual Design Request detected: {text}")
-
-                        # Tag user for human review (Ensure Tag ID 9 exists in DB)
-                        add_contact_tag(phone, 9)
-
-                        # Send the auto-reply
-                        send_text_internal(phone, "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly.")
-                        continue
-
-                        result = process_text_change_request(
-                            phone=phone,
-                            customer_text=text,
-                            reply_caption=reply_caption
-                        )
-
-                        if not result:
-                            continue
-
-                        delta = resolve_text_delta(text, result["semantic_svg"])
-                        if not delta:
-                            continue
-
-                        add_contact_tag(phone, 7)
-                        ai_handled = True
-
-                        updated_svg = apply_delta(result["semantic_svg"], delta)
-                        confirm_msg = build_confirmation_message(updated_svg)
-
-                        send_buttons(phone, confirm_msg, [
-                            {"id": "confirm_text", "title": "✅ Confirm"},
-                            {"id": "edit_text", "title": "✏️ Edit"}
-                        ])
-
-                        PENDING_TEXT_CONFIRMATIONS[phone] = {
-                            "folder_path": result["folder_path"],
-                            "semantic_svg": updated_svg,
-                            "target_block": result["target_block"],
-                            "ts": time.time()
-                        }
-                        continue
-
-
-
-
-                # =====================================================
-                # 🤖 FALLBACK
-                # =====================================================
-                run_automations(
-                    cur=cur,
-                    phone=phone,
-                    message_text=text,
-                    send_text=send_text_internal
-                )
+                # -----------------------------------------------------
+                # 🤖 4. FALLBACK: GENERAL AUTOMATION
+                # -----------------------------------------------------
+                print("▶️ [FLOW] Running General Automations...")
+                run_automations(cur=cur, phone=phone, message_text=text, send_text=send_text_internal)
 
             except Exception as e:
                 print(f"❌ Message Error: {e}")
                 traceback.print_exc()
 
-        # -------------------------------------------------
-        # 6️⃣ STATUS UPDATES
-        # -------------------------------------------------
+        # Status Updates
         for s in value.get("statuses", []):
-            cur.execute(
-                "UPDATE messages SET status = %s WHERE whatsapp_id = %s",
-                (s.get("status"), s.get("id"))
-            )
+            cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
 
         conn.commit()
         cur.close()
@@ -507,7 +384,6 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-
 
             # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
