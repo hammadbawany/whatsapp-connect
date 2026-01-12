@@ -242,7 +242,7 @@ def send_text_via_meta_and_db(phone, text):
 # ====================================================
 
 def run_scheduled_automation():
-    from app import add_contact_tag
+    from app.app import add_contact_tag  # ✅ CORRECT, SAFE
 
     if os.getenv("ENABLE_CRON") != "true":
         return
