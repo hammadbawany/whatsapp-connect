@@ -278,7 +278,8 @@ def run_scheduled_automation():
 
         if d['phones']:
             candidates.append(d)
-            for p in d['phones']: all_phones.add(p[-10:])
+            for p in d['phones']: all_phones.add(short_pk(p))
+
 
     responded_set = set()
     sent_set = set()
@@ -397,7 +398,8 @@ def preview_automation():
         d = parse_folder_name(name)
         if d['phones']:
             parsed_list.append(d)
-            for p in d['phones']: all_phones.add(p[-10:])
+            for p in d['phones']: all_phones.add(short_pk(p))
+
 
     responded_set = set()
     if all_phones:
@@ -559,3 +561,10 @@ def manual_send_design():
     except Exception as e:
         release_lock_if_safe(folder, sent_count > 0)
         return jsonify({"error": str(e)}), 500
+
+
+def short_pk(phone):
+    p = re.sub(r"\D", "", phone)
+    if p.startswith("92"):
+        return p[2:]   # 10 digits
+    return p[-10:]
