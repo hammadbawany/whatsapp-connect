@@ -9,7 +9,9 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, session, request
 from app.db import get_conn
 from psycopg2.extras import RealDictCursor
-import psycopg2  # <--- REQUIRED FOR INTEGRITY ERROR CHECK
+import psycopg2
+# Removed top-level import to prevent circular dependency
+# from app import PENDING_DESIGN_CONFIRMATION
 
 design_sender_bp = Blueprint("design_sender", __name__)
 
@@ -80,33 +82,24 @@ def get_dropbox_client(user_id):
     return get_system_dropbox_client()
 
 def attempt_to_claim_folder(folder_name, phone, method='cron'):
-    """
-    🔥 ATOMIC LOCKING:
-    Uses Postgres unique constraint + immediate commit check.
-    If insertion fails (UniqueViolation), it returns False immediately.
-    """
     conn = get_conn()
     cur = conn.cursor()
     try:
-        # 1. First, quick check if it exists
         cur.execute("SELECT 1 FROM design_sent_log WHERE folder_name = %s", (folder_name,))
         if cur.fetchone():
             cur.close(); conn.close()
-            return False # Already exists (sent or processing)
+            return False
 
-        # 2. Try to Insert (The Real Lock)
-        # Note: We REMOVED 'ON CONFLICT DO NOTHING' to force an error if it exists
         cur.execute("""
             INSERT INTO design_sent_log (folder_name, phone_number, status, sent_method)
             VALUES (%s, %s, 'processing', %s)
         """, (folder_name, phone, method))
 
-        conn.commit() # Commit instantly to lock it for everyone else
+        conn.commit()
         cur.close(); conn.close()
         return True
 
     except psycopg2.IntegrityError:
-        # Race condition caught: Someone else inserted it just now.
         conn.rollback()
         cur.close(); conn.close()
         return False
@@ -127,18 +120,11 @@ def update_sent_status(folder_name, file_name, method, status='sent'):
     conn.commit(); cur.close(); conn.close()
 
 def release_lock_if_safe(folder_name, sent_any=False):
-    """
-    If we haven't sent anything, delete the lock so we can retry later.
-    If we HAVE sent something, mark as ERROR but keep the lock to prevent duplicates.
-    """
     conn = get_conn(); cur = conn.cursor()
     if sent_any:
-        # We partially sent stuff, DO NOT DELETE. Just mark as error.
         cur.execute("UPDATE design_sent_log SET status='partial_error' WHERE folder_name=%s", (folder_name,))
     else:
-        # Nothing sent, safe to delete and retry later
         cur.execute("DELETE FROM design_sent_log WHERE folder_name=%s", (folder_name,))
-
     conn.commit(); cur.close(); conn.close()
 
 def move_folder_after_sending(dbx, current_full_path, folder_name):
@@ -254,6 +240,8 @@ def send_text_via_meta_and_db(phone, text):
 # ====================================================
 
 def run_scheduled_automation():
+    from app import PENDING_DESIGN_CONFIRMATION  # Import here to avoid circular imports
+
     if os.getenv("ENABLE_CRON") != "true": return
 
     print(f"\n⏰ [CRON] Starting Auto Design Check: {datetime.utcnow()}")
@@ -361,6 +349,13 @@ def run_scheduled_automation():
                 send_text_via_meta_and_db(active_phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
                 update_sent_status(item['folder_name'], f"{len(pngs)} files", method='cron')
                 move_folder_after_sending(dbx, item['display_path'], item['folder_name'])
+
+                # ✅ CORRECTED: Using normalize_phone
+                PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
+                    "ts": time.time(),
+                    "source": "auto_design_prompt"
+                }
+
             else:
                 release_lock_if_safe(item['folder_name'], False)
 
@@ -440,6 +435,8 @@ def preview_automation():
 @design_sender_bp.route("/run_auto_design_delivery", methods=['POST'])
 def run_auto_design_delivery():
     """BATCH EXECUTION"""
+    from app import PENDING_DESIGN_CONFIRMATION # Import here
+
     if "user_id" not in session: return jsonify({"error": "Unauthorized"}), 401
     data = request.get_json(); folders = data.get('folders', [])
     if not folders: return jsonify({"sent_count": 0, "errors": ["No folders"]})
@@ -484,6 +481,13 @@ def run_auto_design_delivery():
                 update_sent_status(folder, f"{len(pngs)} files", method='manual_batch')
                 move_folder_after_sending(dbx, full_path, folder)
                 sent_count += 1
+
+                # ✅ CORRECTED: Using 'phone' variable, not 'active_phone'
+                PENDING_DESIGN_CONFIRMATION[normalize_phone(phone)] = {
+                    "ts": time.time(),
+                    "source": "auto_design_prompt"
+                }
+
             else:
                 release_lock_if_safe(folder, False)
 
@@ -497,6 +501,8 @@ def run_auto_design_delivery():
 @design_sender_bp.route("/manual_send_design", methods=['POST'])
 def manual_send_design():
     """MANUAL SINGLE BUTTON"""
+    from app import PENDING_DESIGN_CONFIRMATION # Import here
+
     if "user_id" not in session: return jsonify({"error": "Unauthorized"}), 401
 
     data = request.get_json()
@@ -536,8 +542,15 @@ def manual_send_design():
             except Exception as e: errors.append(f"{f.name}: {str(e)}")
 
         if sent_count > 0:
-            try: send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
-            except: pass
+            # ✅ CORRECTED: Fixed indentation and using 'phone'
+            try:
+                send_text_via_meta_and_db(phone, "Please confirm text and design.\nNo changes will be made after confirmation.\nIf there is any correction - please reply to image for faster response")
+                PENDING_DESIGN_CONFIRMATION[normalize_phone(phone)] = {
+                    "ts": time.time(),
+                    "source": "auto_design_prompt"
+                }
+            except Exception as e:
+                print("❌ Failed to set confirmation or send text:", e)
 
             update_sent_status(folder, f"{sent_count} PNGs", method='manual_single')
             move_folder_after_sending(dbx, path, folder)

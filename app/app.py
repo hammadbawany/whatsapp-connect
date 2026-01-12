@@ -66,6 +66,8 @@ REDIRECT_URI = os.getenv("DROPBOX_REDIRECT_URI")
 import time
 
 TEXT_CONFIRMATION_TTL_SECONDS = 4 * 60 * 60  # 4 hours
+PENDING_DESIGN_CONFIRMATION = {}
+DESIGN_CONFIRM_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
 
 
@@ -224,6 +226,7 @@ def webhook():
         for msg in value.get("messages", []):
             try:
                 phone = msg.get("from")
+                phone = normalize_phone(phone)
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
                 context_whatsapp_id = msg.get("context", {}).get("id")
@@ -316,10 +319,46 @@ def webhook():
                 lower = text.lower().strip()
 
                 # =====================================================
+                # ✅ DESIGN CONFIRMATION (STRICT MODE)
+                # =====================================================
+                if phone in PENDING_DESIGN_CONFIRMATION:
+
+                    pending = PENDING_DESIGN_CONFIRMATION[phone]
+
+                    # ⏱ TTL CHECK
+                    if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
+                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                        continue
+                    else:
+                        # Case 1️⃣: Reply to image / design
+                        if context_whatsapp_id:
+                            if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
+                                add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+
+                                PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                                continue
+
+                        # Case 2️⃣: Confirmation keywords after prompt
+                        CONFIRM_WORDS = {
+                            "confirm", "confirmed", "ok", "okay", "done", "final",
+                            "print", "yes", "haan", "han", "theek", "sahi"
+                        }
+
+                        if text.lower().strip() in CONFIRM_WORDS:
+                            if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
+                                add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+
+                                PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                                continue
+
+                # =====================================================
                 # 🚦 PENDING TEXT CONFIRMATION
                 # =====================================================
-                if phone in PENDING_TEXT_CONFIRMATIONS and pending.get("source") == "text_edit":
+                if phone in PENDING_TEXT_CONFIRMATIONS:
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
+
+                    if pending.get("source") != "text_edit":
+                        continue
 
                     if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
                         PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
@@ -412,13 +451,8 @@ def webhook():
                         }
                         continue
 
-                # =====================================================
-                # ✅ DESIGN CONFIRMATION (ONLY IF AI DID NOTHING)
-                # =====================================================
-                if not ai_handled and process_design_confirmation(
-                    cur, conn, phone, text, context_whatsapp_id
-                ):
-                    continue
+
+
 
                 # =====================================================
                 # 🤖 FALLBACK

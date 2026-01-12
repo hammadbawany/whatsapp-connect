@@ -17,13 +17,28 @@ def is_text_edit_command(text: str) -> bool:
 
     t = text.lower().strip()
 
+    # 1. Edit Starters (Strong signals)
     edit_starters = [
         "change", "edit", "correct", "fix", "replace",
         "make", "update", "remove", "delete", "rewrite",
-        "write", "set"
+        "write", "set", "add", "spelling", "spell"
     ]
 
-    return any(t.startswith(v) for v in edit_starters)
+    # 2. Contextual Edit Words (If these appear anywhere, it's likely an edit)
+    edit_keywords = [
+        "font", "size", "color", "colour", "bold", "italic",
+        "capital", "small", "upper", "lower", "mistake",
+        "wrong", "spelling", "alignment", "center", "move"
+    ]
+
+    # Check matches
+    if any(t.startswith(v) for v in edit_starters):
+        return True
+
+    if any(k in t for k in edit_keywords):
+        return True
+
+    return False
 
 
 # -------------------------------------------------
@@ -68,34 +83,45 @@ def is_design_confirmation(text: str) -> bool:
     if not text:
         return False
 
-    t = text.lower().strip()
+    # 1. Clean the text: Remove emojis and punctuation, keep only letters/numbers
+    # This turns "Ok 👍" into "ok" and "Confirmed." into "confirmed"
+    clean_text = re.sub(r'[^\w\s]', '', text.lower()).strip()
 
-    confirmations = [
-        "confirm",
-        "confirmed",
-        "ok",
-        "okay",
-        "done",
-        "final",
-        "approved",
-        "perfect",
-        "print",
-        "go ahead",
-        "proceed",
-        "lock",
+    # 2. Split into set of words for fast lookup
+    words = set(clean_text.split())
+
+    confirmations = {
+        "confirm", "confirmed", "confirming",
+        "ok", "okay", "k", "done",
+        "final", "finalize", "approved", "approve",
+        "perfect", "good", "great", "nice",
+        "print", "printing",
+        "proceed", "go", "ahead",
+        "lock", "yes", "yep", "yeah", "ji",
 
         # Roman Urdu
-        "theek",
-        "sahi",
-        "haan",
-        "han",
-        "jee",
-        "kardo",
-        "kardain",
-        "krden"
+        "theek", "thk", "sahi", "set",
+        "haan", "han", "jee", "g",
+        "kardo", "krdo", "kardain", "krden", "karden"
+    }
+
+    # 3. Check for phrase matches (for multi-word confirmations)
+    phrases = [
+        "looks good", "it is good", "its good",
+        "all good", "go ahead", "send for printing",
+        "all correct", "everything is correct" 
     ]
 
-    return t in confirmations
+    # Check 1: Is any specific word in the set?
+    if not words.isdisjoint(confirmations):
+        return True
+
+    # Check 2: Do any specific phrases appear in the raw text?
+    if any(p in clean_text for p in phrases):
+        return True
+
+    return False
+
 
 
 # -------------------------------------------------
