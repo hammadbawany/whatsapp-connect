@@ -70,6 +70,10 @@ PENDING_DESIGN_CONFIRMATION = {}
 DESIGN_CONFIRM_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
 
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 @app.route("/")
 def index():

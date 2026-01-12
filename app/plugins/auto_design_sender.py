@@ -243,7 +243,7 @@ def run_scheduled_automation():
     if os.getenv("ENABLE_CRON") != "true":
         return
 
-    print(f"\n⏰ [CRON] Starting Auto Design Check: {datetime.utcnow()}", flush=True)
+    logging.warning(f"[CRON] Starting Auto Design Check at {datetime.utcnow()}")
     init_log_table()
 
     dbx = get_system_dropbox_client()
@@ -384,7 +384,8 @@ def run_scheduled_automation():
                 release_lock_if_safe(item["folder_name"], False)
                 continue
 
-            print(f"🚀 [CRON] Sending '{item['folder_name']}'", flush=True)
+            #print(f"🚀 [CRON] Sending '{item['folder_name']}'", flush=True)
+            logging.warning(f"[CRON] Sending folder: {item['folder_name']}")
 
             sent_any = False
             for i, f in enumerate(pngs):
