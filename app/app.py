@@ -318,7 +318,7 @@ def webhook():
                 # =====================================================
                 # 🚦 PENDING TEXT CONFIRMATION
                 # =====================================================
-                if phone in PENDING_TEXT_CONFIRMATIONS:
+                if phone in PENDING_TEXT_CONFIRMATIONS and pending.get("source") == "text_edit":
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
 
                     if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
