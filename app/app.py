@@ -268,26 +268,52 @@ def webhook():
                 # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS
                 # -----------------------------------------------------
                 if phone in PENDING_TEXT_CONFIRMATIONS:
+                    print(f"🚦 [STATE] Found Pending Text Edit for {phone}")
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
+
+                    # Check Button ID (If clicked)
+                    button_id = ""
+                    if msg_type == "interactive":
+                        button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
+
+                    # Logic: Check ID OR Text
+                    is_confirm = (button_id == "confirm_text") or (lower in {"confirm", "confirmed", "✅ confirm", "yes", "ok", "done"})
+                    is_edit = (button_id == "edit_text") or (lower in {"edit", "change text", "no", "change"})
+
                     if pending.get("source") == "text_edit":
                         if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
+                            print("⏰ [STATE] Expired.")
                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
                         else:
-                            # User says "Yes/Confirm" to the new text preview
-                            if lower in {"confirm", "confirmed", "✅ confirm"}:
+                            if is_confirm:
+                                print("✅ [TEXT EDIT] Confirmed via Button/Text.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+
                                 payload = {
-                                    "action": "text_change", "source": "whatsapp", "folder_path": pending["folder_path"],
-                                    "final_text": pending["semantic_svg"], "target_block": pending["target_block"], "phone": phone
+                                    "action": "text_change",
+                                    "source": "whatsapp",
+                                    "folder_path": pending["folder_path"],
+                                    "final_text": pending["semantic_svg"],
+                                    "target_block": pending["target_block"],
+                                    "phone": phone
                                 }
+                                # Execute Change
                                 requests.post(f"{APP_BASE_URL}/api/design/action", json=payload, timeout=15)
                                 send_text_internal(phone, "✅ Applying changes now.")
                                 continue
-                            # User says "No/Edit" to the preview
-                            elif lower in {"edit", "change text", "no"}:
+
+                            elif is_edit:
+                                print("✏️ [TEXT EDIT] Rejected via Button/Text.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                                send_text_internal(phone, "✏️ Please send the correct text.")
+                                send_text_internal(phone, "✏️ Okay, please type the correct text below.")
                                 continue
+
+                            else:
+                                print(f"⚪ [TEXT EDIT] Input '{lower}' not recognized as Confirm/Edit.")
+                else:
+                    # Debug Log to see if memory is empty
+                    print(f"⚪ [STATE] Phone {phone} NOT in Pending Text List. (List size: {len(PENDING_TEXT_CONFIRMATIONS)})")
+
 
                 # -----------------------------------------------------
                 # 🧠 2. PRIORITY: INTENT DETECTION (EDITING)
@@ -314,7 +340,7 @@ def webhook():
                                 ai_handled = True
                                 updated_svg = apply_delta(result["semantic_svg"], delta)
                                 confirm_msg = build_confirmation_message(updated_svg)
-                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "✅ Confirm"}, {"id": "edit_text", "title": "✏️ Edit"}])
+                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "✅ Confirm Text"}, {"id": "edit_text", "title": "✏️ Edit"}])
 
                                 PENDING_TEXT_CONFIRMATIONS[phone] = {
                                     "source": "text_edit", "folder_path": result["folder_path"],
@@ -3875,40 +3901,92 @@ def send_buttons(phone, text, buttons):
     """
     buttons = [{"id": "btn_1", "title": "Button 1"}, ...]
     """
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
-    acc = cur.fetchone()
-    cur.close(); conn.close()
+    try:
+        # 1. Get Account Info
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+        acc = cur.fetchone()
 
-    if not acc: return
+        # Fallback logic if specific WABA not found
+        if not acc:
+            cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
+            acc = cur.fetchone()
 
-    url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
-    headers = {"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}
+        cur.close()
+        conn.close()
 
-    # Build Button Components
-    button_components = []
-    for btn in buttons:
-        button_components.append({
-            "type": "reply",
-            "reply": {
-                "id": btn["id"],
-                "title": btn["title"]
+        if not acc:
+            print("❌ send_buttons: No WhatsApp account found.")
+            return
+
+        # 2. Setup API Request
+        url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        headers = {"Authorization": f"Bearer {acc['access_token']}", "Content-Type": "application/json"}
+
+        # Build Button Components
+        button_components = []
+        for btn in buttons:
+            button_components.append({
+                "type": "reply",
+                "reply": {
+                    "id": btn["id"],
+                    "title": btn["title"]
+                }
+            })
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": normalize_phone(phone),
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": text},
+                "action": {"buttons": button_components}
             }
-        })
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": text},
-            "action": {"buttons": button_components}
         }
-    }
 
-    requests.post(url, headers=headers, json=payload)
+        # 3. Send & Capture Response
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        resp_json = response.json()
+
+        wa_id = None
+        if response.status_code in [200, 201]:
+            try:
+                wa_id = resp_json.get('messages', [{}])[0].get('id')
+            except:
+                pass
+        else:
+            print(f"❌ send_buttons failed: {resp_json}")
+
+        # 4. 🟢 SAVE TO DATABASE (The Missing Part)
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                message,
+                whatsapp_id,
+                status,
+                timestamp,
+                message_kind
+            ) VALUES (%s, %s, 'agent', %s, %s, 'sent', NOW(), 'interactive')
+        """, (
+            acc['id'],
+            normalize_phone(phone),
+            text,  # The question text (e.g. "Confirm final text?")
+            wa_id
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        print(f"✅ Button message saved to DB for {phone}")
+
+    except Exception as e:
+        print(f"❌ send_buttons Error: {e}")
 
 
 def add_contact_tag(phone, tag_id):
