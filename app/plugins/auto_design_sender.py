@@ -11,7 +11,6 @@ from app.db import get_conn
 from psycopg2.extras import RealDictCursor
 import psycopg2
 import logging
-from app import add_contact_tag
 
 # Removed top-level import to prevent circular dependency
 # from app import PENDING_DESIGN_CONFIRMATION
@@ -243,6 +242,8 @@ def send_text_via_meta_and_db(phone, text):
 # ====================================================
 
 def run_scheduled_automation():
+    from app import add_contact_tag
+
     if os.getenv("ENABLE_CRON") != "true":
         return
 
