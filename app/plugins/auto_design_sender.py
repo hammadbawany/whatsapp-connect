@@ -10,6 +10,8 @@ from flask import Blueprint, jsonify, session, request
 from app.db import get_conn
 from psycopg2.extras import RealDictCursor
 import psycopg2
+import logging
+
 # Removed top-level import to prevent circular dependency
 # from app import PENDING_DESIGN_CONFIRMATION
 
