@@ -322,38 +322,40 @@ def webhook():
 
                 lower = text.lower().strip()
 
+
                 # =====================================================
                 # ✅ DESIGN CONFIRMATION (STRICT MODE)
                 # =====================================================
                 if phone in PENDING_DESIGN_CONFIRMATION:
 
                     pending = PENDING_DESIGN_CONFIRMATION[phone]
+                    print(f"🕵️ [CONFIRMATION DEBUG] Checking phone: {phone} | Text: '{text}'")
 
                     # ⏱ TTL CHECK
                     if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
+                        print(f"❌ [CONFIRMATION DEBUG] TTL Expired for {phone}")
                         PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                        continue
+                        # Let it flow to automation if expired
                     else:
-                        # Case 1️⃣: Reply to image / design
+                        # 🔍 Context Debugging
                         if context_whatsapp_id:
-                            if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
-                                add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+                            print(f"ℹ️ [CONFIRMATION DEBUG] Context ID present: {context_whatsapp_id}")
+                        else:
+                            print(f"ℹ️ [CONFIRMATION DEBUG] No Context ID (Keyword Check)")
 
-                                PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                                continue
+                        # ⚡ UNIFIED CHECK (The Fix)
+                        # We do NOT manually check keywords here. We let the plugin do the cleaning & matching.
+                        # This allows "Done 👍🏻", "Yes confirmed", etc. to pass.
 
-                        # Case 2️⃣: Confirmation keywords after prompt
-                        CONFIRM_WORDS = {
-                            "confirm", "confirmed", "ok", "okay", "done", "final",
-                            "print", "yes", "haan", "han", "theek", "sahi"
-                        }
+                        is_handled = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
 
-                        if text.lower().strip() in CONFIRM_WORDS:
-                            if process_design_confirmation(cur, conn, phone, text, context_whatsapp_id):
-                                add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+                        if is_handled:
+                            print(f"✅ [CONFIRMATION DEBUG] Confirmed/Rejected. Tagging user {phone} with ID 5")
+                            add_contact_tag(phone, 5)  # ✅ DESIGN CONFIRMED TAG
+                            PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                            continue
 
-                                PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                                continue
+                        print(f"⚪ [CONFIRMATION DEBUG] Text '{text}' was not a confirmation. Checking next...")
 
                 # =====================================================
                 # 🚦 PENDING TEXT CONFIRMATION
