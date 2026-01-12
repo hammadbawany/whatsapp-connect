@@ -11,6 +11,7 @@ from app.db import get_conn
 from psycopg2.extras import RealDictCursor
 import psycopg2
 import logging
+from app import add_contact_tag
 
 # Removed top-level import to prevent circular dependency
 # from app import PENDING_DESIGN_CONFIRMATION
@@ -321,7 +322,9 @@ def run_scheduled_automation():
         )
 
         for r in cur.fetchall():
-            responded_set.add(r[0])
+            val = r[0] if not isinstance(r, dict) else list(r.values())[0]
+            responded_set.add(val)
+
 
         cur.execute("SELECT folder_name FROM design_sent_log")
         for r in cur.fetchall():
@@ -414,6 +417,8 @@ def run_scheduled_automation():
                     "No changes will be made after confirmation.\n"
                     "If there is any correction - please reply to image for faster response"
                 )
+                add_contact_tag(active_phone, 1)
+
 
                 update_sent_status(
                     item["folder_name"],
@@ -553,6 +558,8 @@ def run_auto_design_delivery():
                 update_sent_status(folder, f"{len(pngs)} files", method='manual_batch')
                 move_folder_after_sending(dbx, full_path, folder)
                 sent_count += 1
+                add_contact_tag(active_phone, 1)
+
 
                 # ✅ CORRECTED: Using 'phone' variable, not 'active_phone'
                 PENDING_DESIGN_CONFIRMATION[normalize_phone(phone)] = {
@@ -621,6 +628,8 @@ def manual_send_design():
                     "ts": time.time(),
                     "source": "auto_design_prompt"
                 }
+                add_contact_tag(active_phone, 1)
+
             except Exception as e:
                 print("❌ Failed to set confirmation or send text:", e)
 
