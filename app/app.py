@@ -288,7 +288,8 @@ def webhook():
                             if is_confirm:
                                 print("✅ [TEXT EDIT] Confirmed via Button/Text.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-
+                                 # 🟢 1. Send Immediate Feedback
+                                send_text_internal(phone, "Okay. Let me edit and show you ⏳")
                                 payload = {
                                     "action": "text_change",
                                     "source": "whatsapp",
