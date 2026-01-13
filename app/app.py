@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from urllib.parse import quote
 import logging
 import http.client as http_client
+from threading import Thread
 
 
 load_dotenv()
@@ -160,26 +161,16 @@ def get_current_user():
 def webhook():
     ai_handled = False
 
-    # -----------------------------------------------------
     # 1️⃣ VERIFICATION
-    # -----------------------------------------------------
     if request.method == "GET":
-        print("\n🔥🔥🔥 WEBHOOK Get HIT 🔥🔥🔥")
-        sys.stdout.flush()
         VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
         if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
         return "Verification failed", 403
 
-    # -----------------------------------------------------
-    # 2️⃣ INCOMING EVENTS (POST)
-    # -----------------------------------------------------
+    # 2️⃣ INCOMING EVENTS
     try:
-        # RAW LOGGING
-        raw_data = request.get_data(as_text=True)
-        # print(f"\n🔥🔥🔥 RAW WEBHOOK:\n{raw_data}\n", file=sys.stdout)
-
-        data = json.loads(raw_data)
+        data = json.loads(request.get_data(as_text=True))
         entry = data.get("entry", [])
         if not entry: return "OK", 200
         changes = entry[0].get("changes", [])
@@ -205,41 +196,31 @@ def webhook():
                 cur.execute("INSERT INTO contacts (phone, name) VALUES (%s, %s) ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name", (c.get("wa_id"), c.get("profile", {}).get("name")))
             except: pass
 
-        # -------------------------------------------------
         # 4️⃣ PROCESS MESSAGES
-        # -------------------------------------------------
         for msg in value.get("messages", []):
             try:
                 phone = normalize_phone(msg.get("from"))
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
 
-                # 🟢 CONTEXT CAPTURE
+                # Context
                 context_whatsapp_id = None
                 if msg.get("context"):
                     context_whatsapp_id = msg.get("context", {}).get("id")
-                    print(f"🔗 [CONTEXT] Reply to ID: {context_whatsapp_id}")
 
                 print(f"\n📨 [WEBHOOK] New Message from {phone} | Type: {msg_type}")
 
                 # Ensure contact exists
                 cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
 
-                # =====================================================
-                # 🟡 MEDIA (IMAGE / VOICE / VIDEO / DOC / STICKER)
-                # =====================================================
+                # MEDIA HANDLING
                 if msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
                     media_obj = msg.get(msg_type, {})
-                    cur.execute("""
-                        INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp)
-                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())
-                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
+                    cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp) VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())", (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
                     conn.commit()
                     continue
 
-                # =====================================================
-                # 🟢 TEXT / INTERACTIVE / BUTTON
-                # =====================================================
+                # TEXT HANDLING
                 text = ""
                 if msg_type == "text": text = msg.get("text", {}).get("body", "")
                 elif msg_type == "interactive":
@@ -250,15 +231,10 @@ def webhook():
                 if not text: continue
 
                 # Save Message
-                cur.execute("""
-                    INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp)
-                    VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())
-                """, (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id))
+                cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp) VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())", (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id))
                 conn.commit()
 
                 lower = text.lower().strip()
-
-                # 🔍 Fetch Context Message (The Agent Message user replied to)
                 row = None
                 if context_whatsapp_id:
                     cur.execute("SELECT message FROM messages WHERE whatsapp_id = %s AND sender = 'agent'", (context_whatsapp_id,))
@@ -271,14 +247,12 @@ def webhook():
                     print(f"🚦 [STATE] Found Pending Text Edit for {phone}")
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
 
-                    # Check Button ID (If clicked)
                     button_id = ""
                     if msg_type == "interactive":
                         button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
 
-                    # Logic: Check ID OR Text
-                    is_confirm = (button_id == "confirm_text") or (lower in {"confirm", "confirmed", "✅ confirm", "yes", "ok", "done"})
-                    is_edit = (button_id == "edit_text") or (lower in {"edit", "change text", "no", "change"})
+                    is_confirm = (button_id == "confirm_text") or (lower in {"confirm", "confirmed", "✅ confirm", "yes", "ok", "done", "confirm text"})
+                    is_edit = (button_id == "edit_text") or (lower in {"edit", "change text", "no", "change", "edit text"})
 
                     if pending.get("source") == "text_edit":
                         if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
@@ -288,44 +262,47 @@ def webhook():
                             if is_confirm:
                                 print("✅ [TEXT EDIT] Confirmed via Button/Text.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                                 # 🟢 1. Send Immediate Feedback
+
+                                # 1. Send Immediate Reply
                                 send_text_internal(phone, "Okay. Let me edit and show you ⏳")
+
+                                # 2. Prepare Payload
                                 payload = {
-                                    "action": "text_change",
-                                    "source": "whatsapp",
-                                    "folder_path": pending["folder_path"],
-                                    "final_text": pending["semantic_svg"],
-                                    "target_block": pending["target_block"],
-                                    "phone": phone
+                                    "action": "text_change", "source": "whatsapp", "folder_path": pending["folder_path"],
+                                    "final_text": pending["semantic_svg"], "target_block": pending["target_block"], "phone": phone
                                 }
-                                # Execute Change
-                                requests.post(f"{APP_BASE_URL}/api/design/action", json=payload, timeout=15)
-                                send_text_internal(phone, "✅ Applying changes now.")
+
+                                # 🟢 3. BACKGROUND THREAD (FIX FOR TIMEOUT)
+                                def bg_design_trigger(api_url, json_data):
+                                    try:
+                                        print(f"🚀 [BG] Triggering Design API for {json_data.get('phone')}...")
+                                        # Use 60s timeout in background, main thread won't wait
+                                        requests.post(api_url, json=json_data, timeout=60)
+                                        print(f"✅ [BG] Design API request sent successfully.")
+                                    except Exception as e:
+                                        print(f"❌ [BG] Design API Failed: {e}")
+
+                                # Start Thread
+                                Thread(target=bg_design_trigger, args=(f"{APP_BASE_URL}/api/design/action", payload)).start()
+
                                 continue
 
                             elif is_edit:
                                 print("✏️ [TEXT EDIT] Rejected via Button/Text.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                                send_text_internal(phone, "✏️ Okay, please type the correct text below.")
+                                send_text_internal(phone, "✏️ Please send the correct text.")
                                 continue
 
                             else:
-                                print(f"⚪ [TEXT EDIT] Input '{lower}' not recognized as Confirm/Edit.")
-                else:
-                    # Debug Log to see if memory is empty
-                    print(f"⚪ [STATE] Phone {phone} NOT in Pending Text List. (List size: {len(PENDING_TEXT_CONFIRMATIONS)})")
-
+                                print(f"⚪ [TEXT EDIT] Input '{lower}' not recognized.")
 
                 # -----------------------------------------------------
-                # 🧠 2. PRIORITY: INTENT DETECTION (EDITING)
+                # 🧠 2. PRIORITY: INTENT DETECTION
                 # -----------------------------------------------------
                 intent = detect_design_intent(text)
                 print(f"🧠 [INTENT] Detected: {intent}")
 
-                # Execute if context exists OR user is in pending confirmation state
                 if row or (phone in PENDING_DESIGN_CONFIRMATION):
-
-                    # A. TEXT CHANGES (Automated)
                     if intent in ["text", "text_implicit"]:
                         print("▶️ [FLOW] Text Change Logic Started...")
                         from app.plugins.text_change_detector import process_text_change_request, resolve_text_delta, apply_delta, build_confirmation_message
@@ -336,12 +313,10 @@ def webhook():
                         if result:
                             delta = resolve_text_delta(text, result["semantic_svg"])
                             if delta:
-                                print(f"   ✅ Delta Found: {delta}")
                                 add_contact_tag(phone, 7)
-                                ai_handled = True
                                 updated_svg = apply_delta(result["semantic_svg"], delta)
                                 confirm_msg = build_confirmation_message(updated_svg)
-                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "✅ Confirm Text"}, {"id": "edit_text", "title": "✏️ Edit"}])
+                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "Confirm Text"}, {"id": "edit_text", "title": "Edit Text"}])
 
                                 PENDING_TEXT_CONFIRMATIONS[phone] = {
                                     "source": "text_edit", "folder_path": result["folder_path"],
@@ -349,23 +324,16 @@ def webhook():
                                 }
                                 continue
 
-                    # B. MANUAL EDITS (Typography, Color, Design Swap)
                     elif intent in ["typography", "color", "design_swap"]:
-                        print(f"🎨 Manual Request ({intent}). Tagging Agent.")
                         add_contact_tag(phone, 9)
-                        if intent == "design_swap":
-                            send_text_internal(phone, "🔄 I've noted you want to change the design or add items. An agent will help you shortly.")
-                        else:
-                            send_text_internal(phone, "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly.")
+                        msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly."
+                        send_text_internal(phone, msg_reply)
                         continue
 
-                    # C. LAYOUT (Semi-Automated)
                     elif intent == "layout":
-                        print("▶️ [FLOW] Layout Change detected.")
                         from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
-                        if success:
-                            send_text_internal(phone, "🔄 Adjusting the layout for you...")
+                        if success: send_text_internal(phone, "🔄 Adjusting the layout for you...")
                         else:
                             add_contact_tag(phone, 9)
                             send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
@@ -377,7 +345,6 @@ def webhook():
                 if phone in PENDING_DESIGN_CONFIRMATION:
                     print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
                     pending = PENDING_DESIGN_CONFIRMATION[phone]
-
                     if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
                         PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                     else:
@@ -389,7 +356,7 @@ def webhook():
                             continue
 
                 # -----------------------------------------------------
-                # 🤖 4. FALLBACK: GENERAL AUTOMATION
+                # 🤖 4. FALLBACK
                 # -----------------------------------------------------
                 print("▶️ [FLOW] Running General Automations...")
                 run_automations(cur=cur, phone=phone, message_text=text, send_text=send_text_internal)
@@ -398,10 +365,8 @@ def webhook():
                 print(f"❌ Message Error: {e}")
                 traceback.print_exc()
 
-        # Status Updates
         for s in value.get("statuses", []):
             cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
-
         conn.commit()
         cur.close()
         conn.close()
@@ -411,7 +376,6 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-
             # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
