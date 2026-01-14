@@ -354,7 +354,19 @@ def webhook():
                             add_contact_tag(phone, 5)
                             PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                             continue
+                # 🟢 NEW FAILSAFE: STATELESS CONFIRMATION CHECK
+                # If server restarted and lost memory, we still check if text matches "confirm" logic
+                if not ai_handled:
+                    print(f"   🕵️ [FAILSAFE] Checking text for confirmation keywords...")
+                    is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
 
+                    if is_stateless_confirm:
+                        print(f"   ✅ Confirmed (Stateless)! Tagging ID 5.")
+                        add_contact_tag(phone, 5)
+                        # Clean up if it existed
+                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                        continue
+                        
                 # -----------------------------------------------------
                 # 🤖 4. FALLBACK
                 # -----------------------------------------------------
