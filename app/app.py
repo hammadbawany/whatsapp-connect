@@ -331,7 +331,7 @@ def webhook():
                     elif intent in ["typography", "color", "design_swap"]:
                         print(f"🎨 Manual Request ({intent}). Tagging Agent.")
                         add_contact_tag(phone, 9)
-                        msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly."
+                        msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "Let me get back to you."
                         send_text_internal(phone, msg_reply)
                         continue
 
@@ -341,7 +341,7 @@ def webhook():
                         from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
                         if success:
-                            send_text_internal(phone, "🔄 Adjusting the layout for you...")
+                            send_text_internal(phone, "🔄 Adjusting the layout for you...Let me edit and show you")
                         else:
                             add_contact_tag(phone, 9)
                             send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
