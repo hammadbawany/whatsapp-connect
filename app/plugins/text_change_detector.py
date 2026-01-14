@@ -11,6 +11,7 @@ from app.plugins.text_llm_resolver import llm_resolve_text
 import xml.etree.ElementTree as ET
 from io import BytesIO
 import copy
+from app.db import get_conn # Needed for log_llm_decision if used
 
 from app.plugins.dropbox_plugin import (
     get_system_dropbox_client,
@@ -22,6 +23,69 @@ from app.plugins.design_reply_editor import find_order_folder
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
 
 
+import re
+
+def smart_format_text(text):
+    """
+    Unified logic:
+    1. If user used ANY capital letters, trust them and return as-is.
+    2. If all lowercase, apply smart formatting (Mr & Mrs, Brackets, Titles).
+    """
+    if not text: return ""
+
+    # 1. Respect User Input (If they typed "Sara Bawany", don't touch it)
+    # islower() returns True only if there are letters and ALL are lowercase.
+    if not text.strip().islower():
+        return text.strip()
+
+    # --- START AUTO-FORMATTING ---
+    t = text.strip()
+
+    # 2. Fix Common Prefixes & Spacing (Regex)
+    # Fix "Mr and Mrs", "Mr/Mrs", "Mr n Mrs" -> "Mr & Mrs"
+    t = re.sub(r"\b(mr|ms|mrs)\s*([&n/]|and)\s*(mr|ms|mrs)\b", r"\1 & \3", t, flags=re.IGNORECASE)
+    # Ensure space around '&' if missing
+    t = re.sub(r'(\S)&(\S)', r'\1 & \2', t)
+    # Ensure space after dots (e.g. "Prof.Dr" -> "Prof. Dr")
+    t = re.sub(r'\.(?!\s)', '. ', t)
+
+    # 3. Word-by-Word Capitalization Rules
+    words = t.split()
+    processed = []
+
+    # Words to force lowercase
+    lowercase_force = {"and", "of", "the", "with", "at", "by", "for", "bin", "bint"}
+
+    for w in words:
+        lower_w = w.lower()
+
+        # Rule A: Brackets -> (lahore) to (Lahore), (r) to (R)
+        if w.startswith("(") and w.endswith(")"):
+            inner = w[1:-1]
+            if inner.lower() == "r":
+                processed.append("(R)")
+            elif inner.lower() == "retd":
+                processed.append("(Retd)")
+            else:
+                # Handle dashes inside brackets like (Karachi-West)
+                inner_capped = "-".join(part.capitalize() for part in inner.split("-"))
+                processed.append(f"({inner_capped})")
+            continue
+
+        # Rule B: Force Lowercase (unless it's the first word? Optional, but here we enforce list)
+        if lower_w in lowercase_force:
+            processed.append(lower_w)
+            continue
+
+        # Rule C: Specific Titles (Force Capitalization of known acronyms if needed)
+        if lower_w == "usa":
+            processed.append("USA")
+            continue
+
+        # Rule D: Default Capitalization (Handle Hyphens: "abdul-rehman" -> "Abdul-Rehman")
+        processed.append("-".join(part.capitalize() for part in w.split("-")))
+
+    return " ".join(processed)
 
 def infer_target_block(user_text, current_svg):
     scores = {}
@@ -353,43 +417,53 @@ import copy
 from app.plugins.text_llm_resolver import llm_resolve_text
 
 
+# --------------------------------------------------
+# 🔍 RESOLVER FUNCTION
+# --------------------------------------------------
 def resolve_text_delta(user_text, semantic_svg):
     """
     Rule-based first.
     If nothing matches → LLM fallback.
     """
 
-    t = user_text.lower().strip()
+    # Keep original for logic, lower for detection
+    t_lower = user_text.lower().strip()
 
     # --------------------------------------------------
     # 1️⃣ Explicit removals
     # --------------------------------------------------
-    if t.startswith(("remove", "delete")):
+    if t_lower.startswith(("remove", "delete")):
         delta = resolve_remove(user_text, semantic_svg)
         if delta:
             return delta
 
     # --------------------------------------------------
-    # 2️⃣ Explicit "change to" patterns
+    # 2️⃣ Explicit "change to" patterns (FIXED)
     # --------------------------------------------------
-    if " to " in t:
-        parts = t.split(" to ", 1)
-        command_part = parts[0].strip()
-        new_content = parts[1].strip()
+    # We use regex split to get the content with ORIGINAL casing
+    parts = re.split(r'\bto\b', user_text, maxsplit=1, flags=re.IGNORECASE)
 
-        if any(v in command_part for v in ["change", "make", "rename", "set", "write"]):
+    if len(parts) == 2:
+        command_part = parts[0].strip().lower()
+        content_part = parts[1].strip()
+
+        if any(v in command_part for v in ["change", "make", "rename", "set", "write", "edit"]):
+
+            # 🟢 Apply Smart Formatting
+            final_content = smart_format_text(content_part)
+
             return {
                 "action": "replace_block",
                 "target_block": "text2",  # Default name block
-                "to": new_content
+                "to": final_content
             }
 
     # --------------------------------------------------
     # 3️⃣ Capitalization / casing
     # --------------------------------------------------
     casing_keywords = ["capital", "upper", "small", "lower", "chota", "bara"]
-    if any(k in t for k in casing_keywords):
-        words = t.split()
+    if any(k in t_lower for k in casing_keywords):
+        words = t_lower.split()
         ignore_list = ["make", "change", "text", "is", "the", "to", "it"] + casing_keywords
         candidates = [w for w in words if w not in ignore_list]
 
@@ -397,17 +471,16 @@ def resolve_text_delta(user_text, semantic_svg):
             target_word = candidates[0]
 
             for block, value in semantic_svg.items():
-                if not value:
-                    continue
+                if not value: continue
 
                 if target_word.lower() in str(value).lower():
                     new_val = value
 
-                    if "capital" in t or "upper" in t:
+                    if any(x in t_lower for x in ["capital", "upper", "bara"]):
                         pattern = re.compile(re.escape(target_word), re.IGNORECASE)
                         new_val = pattern.sub(target_word.upper(), value)
 
-                    elif "small" in t or "lower" in t:
+                    elif any(x in t_lower for x in ["small", "lower", "chota"]):
                         pattern = re.compile(re.escape(target_word), re.IGNORECASE)
                         new_val = pattern.sub(target_word.lower(), value)
 
@@ -427,7 +500,7 @@ def resolve_text_delta(user_text, semantic_svg):
     # --------------------------------------------------
     # 5️⃣ Numeric corrections (114 not 113)
     # --------------------------------------------------
-    if any(c.isdigit() for c in user_text) and "not" in t:
+    if any(c.isdigit() for c in user_text) and "not" in t_lower:
         correction = resolve_correction(user_text, semantic_svg)
         if correction:
             return correction
@@ -436,7 +509,9 @@ def resolve_text_delta(user_text, semantic_svg):
     # 6️⃣ Full replace (raw content)
     # --------------------------------------------------
     if looks_like_text_content(user_text):
-        return resolve_full_replace(user_text, semantic_svg)
+        # 🟢 Apply Smart Formatting here too
+        final_content = smart_format_text(user_text)
+        return resolve_full_replace(final_content, semantic_svg)
 
     # ==================================================
     # 🧠 7️⃣ LLM FALLBACK (ONLY IF RULES FAILED)
@@ -451,19 +526,11 @@ def resolve_text_delta(user_text, semantic_svg):
 
     if llm_result.get("confidence", 0) < 0.75:
         return None
-    log_llm_decision(
-        conn=get_conn(),                 # reuse DB
-        phone=phone,
-        user_message=user_text,
-        before_text=semantic_svg,
-        after_text=llm_result["final_text"],
-        confidence=confidence,
-        reason=llm_result.get("reason", "llm_fallback")
-    )
 
+    # Optional: Log to DB if needed
+    # log_llm_decision(...)
 
-    # 🔴 IMPORTANT:
-    # LLM RETURNS FULL FINAL SEMANTIC SVG
+    # 🔴 IMPORTANT: LLM RETURNS FULL FINAL SEMANTIC SVG
     return {
         "action": "llm_full_replace",
         "final_semantic_svg": llm_result["final_text"]
