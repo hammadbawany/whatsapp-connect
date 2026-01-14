@@ -241,7 +241,7 @@ def webhook():
                     row = cur.fetchone()
 
                 # -----------------------------------------------------
-                # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS
+                # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS (Button Clicks)
                 # -----------------------------------------------------
                 if phone in PENDING_TEXT_CONFIRMATIONS:
                     print(f"🚦 [STATE] Found Pending Text Edit for {phone}")
@@ -256,11 +256,10 @@ def webhook():
 
                     if pending.get("source") == "text_edit":
                         if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
-                            print("⏰ [STATE] Expired.")
                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
                         else:
                             if is_confirm:
-                                print("✅ [TEXT EDIT] Confirmed via Button/Text.")
+                                print("✅ [TEXT EDIT] Confirmed.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
 
                                 # 1. Send Immediate Reply
@@ -272,38 +271,41 @@ def webhook():
                                     "final_text": pending["semantic_svg"], "target_block": pending["target_block"], "phone": phone
                                 }
 
-                                # 🟢 3. BACKGROUND THREAD (FIX FOR TIMEOUT)
+                                # 3. Background Thread
                                 def bg_design_trigger(api_url, json_data):
                                     try:
                                         print(f"🚀 [BG] Triggering Design API for {json_data.get('phone')}...")
-                                        # Use 60s timeout in background, main thread won't wait
                                         requests.post(api_url, json=json_data, timeout=60)
-                                        print(f"✅ [BG] Design API request sent successfully.")
                                     except Exception as e:
                                         print(f"❌ [BG] Design API Failed: {e}")
 
-                                # Start Thread
                                 Thread(target=bg_design_trigger, args=(f"{APP_BASE_URL}/api/design/action", payload)).start()
-
                                 continue
 
                             elif is_edit:
-                                print("✏️ [TEXT EDIT] Rejected via Button/Text.")
+                                print("✏️ [TEXT EDIT] Rejected.")
                                 PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
                                 send_text_internal(phone, "✏️ Please send the correct text.")
                                 continue
 
-                            else:
-                                print(f"⚪ [TEXT EDIT] Input '{lower}' not recognized.")
-
                 # -----------------------------------------------------
-                # 🧠 2. PRIORITY: INTENT DETECTION
+                # 🧠 2. PRIORITY: INTENT DETECTION (The Unified Block)
                 # -----------------------------------------------------
-                intent = detect_design_intent(text)
-                print(f"🧠 [INTENT] Detected: {intent}")
+                agent_context_msg = row["message"] if row else None
+                intent = detect_design_intent(text, agent_context_msg)
+                print(f"🧠 [INTENT] Detected: {intent} (Context: {agent_context_msg})")
 
-                if row or (phone in PENDING_DESIGN_CONFIRMATION):
-                    if intent in ["text", "text_implicit"]:
+                # If context exists OR user is in pending confirmation OR intent is explicitly detected
+                if row or (phone in PENDING_DESIGN_CONFIRMATION) or intent != "unknown":
+
+                    # A. Manual Discussion (Agent asked question, User answered)
+                    if intent == "manual_discussion":
+                        print("🎨 Contextual Discussion detected. Tagging Agent.")
+                        add_contact_tag(phone, 9)
+                        continue
+
+                    # B. Text Changes (Automated)
+                    elif intent in ["text", "text_implicit"]:
                         print("▶️ [FLOW] Text Change Logic Started...")
                         from app.plugins.text_change_detector import process_text_change_request, resolve_text_delta, apply_delta, build_confirmation_message
 
@@ -313,6 +315,7 @@ def webhook():
                         if result:
                             delta = resolve_text_delta(text, result["semantic_svg"])
                             if delta:
+                                print(f"   ✅ Delta Found: {delta}")
                                 add_contact_tag(phone, 7)
                                 updated_svg = apply_delta(result["semantic_svg"], delta)
                                 confirm_msg = build_confirmation_message(updated_svg)
@@ -324,23 +327,28 @@ def webhook():
                                 }
                                 continue
 
+                    # C. Manual Design Edits
                     elif intent in ["typography", "color", "design_swap"]:
+                        print(f"🎨 Manual Request ({intent}). Tagging Agent.")
                         add_contact_tag(phone, 9)
                         msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "🎨 I've flagged this for our design team to adjust fonts/colors. They will reply shortly."
                         send_text_internal(phone, msg_reply)
                         continue
 
+                    # D. Layout (Semi-Automated)
                     elif intent == "layout":
+                        print("▶️ [FLOW] Layout Change detected.")
                         from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
-                        if success: send_text_internal(phone, "🔄 Adjusting the layout for you...")
+                        if success:
+                            send_text_internal(phone, "🔄 Adjusting the layout for you...")
                         else:
                             add_contact_tag(phone, 9)
                             send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
                         continue
 
                 # -----------------------------------------------------
-                # ✅ 3. PRIORITY: DESIGN CONFIRMATION
+                # ✅ 3. PRIORITY: DESIGN CONFIRMATION (Stateful)
                 # -----------------------------------------------------
                 if phone in PENDING_DESIGN_CONFIRMATION:
                     print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
@@ -354,8 +362,9 @@ def webhook():
                             add_contact_tag(phone, 5)
                             PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                             continue
-                # 🟢 NEW FAILSAFE: STATELESS CONFIRMATION CHECK
-                # If server restarted and lost memory, we still check if text matches "confirm" logic
+
+                # 🟢 3.5 FAILSAFE: DESIGN CONFIRMATION (Stateless)
+                # Catches "Confirm" even if server restarted
                 if not ai_handled:
                     print(f"   🕵️ [FAILSAFE] Checking text for confirmation keywords...")
                     is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
@@ -363,12 +372,11 @@ def webhook():
                     if is_stateless_confirm:
                         print(f"   ✅ Confirmed (Stateless)! Tagging ID 5.")
                         add_contact_tag(phone, 5)
-                        # Clean up if it existed
                         PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                         continue
-                        
+
                 # -----------------------------------------------------
-                # 🤖 4. FALLBACK
+                # 🤖 4. FALLBACK: GENERAL AUTOMATION
                 # -----------------------------------------------------
                 print("▶️ [FLOW] Running General Automations...")
                 run_automations(cur=cur, phone=phone, message_text=text, send_text=send_text_internal)
@@ -388,7 +396,8 @@ def webhook():
         traceback.print_exc()
 
     return "OK", 200
-            # ---------- Auth routes ----------
+
+                # ---------- Auth routes ----------
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
@@ -3824,6 +3833,19 @@ def external_send_shipment():
 
 def detect_design_intent(text):
     t = text.lower()
+def detect_design_intent(user_text, agent_message=None):
+    t = user_text.lower()
+
+    # 🟢 1. CONTEXT CHECK: Did the Agent ask a question?
+    # If agent asked about color/shade/change, and user says "Yes/Ok", it is a discussion, not confirmation.
+    if agent_message:
+        a_msg = agent_message.lower()
+        if "?" in a_msg or "want" in a_msg:
+            # Keywords in agent's question that imply a design discussion
+            discussion_triggers = ["color", "colour", "shade", "font", "size", "change", "adjust", "bold", "remove"]
+            if any(k in a_msg for k in discussion_triggers):
+                return "manual_discussion"
+
 
     # 1. Layout
     layout_keywords = [
@@ -3848,8 +3870,7 @@ def detect_design_intent(text):
     text_change_keywords = [
         "change", "edit", "replace", "write", "spell", "correct",
         "rename", "add", "remove", "delete", "text", "spelling",
-        "likhna", "likh", "naam", "name", # Roman Urdu
-               # Casing keywords moved here:
+        "likhna", "likh", "naam", "name", "hata", "hatadein", "khatam", # 🟢 Added Urdu
         "capital", "uppercase", "upper", "lowercase", "lower", "small", "chota"
     ]
 
