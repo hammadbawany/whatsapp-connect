@@ -326,8 +326,14 @@ def webhook():
                                     "semantic_svg": updated_svg, "target_block": result["target_block"], "ts": time.time()
                                 }
                                 continue
+                    # C. DELIVERY / GENERAL QUERIES (New)
+                    elif intent == "delivery_query":
+                        print("🚚 Delivery Query Detected. Tagging Agent.")
+                        add_contact_tag(phone, 9) # Tag for Human
+                        send_text_internal(phone, "🕒 I have notified the team about your delivery request. They will check the status and reply shortly.")
+                        continue
 
-                    # C. Manual Design Edits
+                    # D. Manual Design Edits
                     elif intent in ["typography", "color", "design_swap"]:
                         print(f"🎨 Manual Request ({intent}). Tagging Agent.")
                         add_contact_tag(phone, 9)
@@ -335,7 +341,7 @@ def webhook():
                         send_text_internal(phone, msg_reply)
                         continue
 
-                    # D. Layout (Semi-Automated)
+                    # E. Layout (Semi-Automated)
                     elif intent == "layout":
                         print("▶️ [FLOW] Layout Change detected.")
                         from app.plugins.design_reply_editor import handle_design_reply
@@ -351,8 +357,17 @@ def webhook():
                 # ✅ 3. PRIORITY: DESIGN CONFIRMATION (Stateful)
                 # -----------------------------------------------------
                 if phone in PENDING_DESIGN_CONFIRMATION:
-                    print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
                     pending = PENDING_DESIGN_CONFIRMATION[phone]
+
+                    # 🟢 FIX 1: Timestamp Check
+                    # Ignore messages sent BEFORE the design prompt was actually sent
+                    # msg.get('timestamp') is a string unix timestamp from WhatsApp
+                    msg_ts = float(msg.get("timestamp", time.time()))
+                    if msg_ts < pending["ts"]:
+                        print(f"⏳ [CONFIRMATION] Ignoring old message (Time: {msg_ts} < Prompt: {pending['ts']})")
+                        continue
+
+                    print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
                     if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
                         PENDING_DESIGN_CONFIRMATION.pop(phone, None)
                     else:
@@ -364,17 +379,21 @@ def webhook():
                             continue
 
                 # 🟢 3.5 FAILSAFE: DESIGN CONFIRMATION (Stateless)
-                # Catches "Confirm" even if server restarted
+                # 🛑 FIX 2: Only allow stateless confirmation if REPLYING TO IMAGE
                 if not ai_handled:
-                    print(f"   🕵️ [FAILSAFE] Checking text for confirmation keywords...")
-                    is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
+                    # If the user is NOT in the pending list (e.g. server restart OR message sent before design),
+                    # we ONLY accept confirmation if they strictly REPLY to the image (context_id).
+                    # This prevents random "Ok" messages from tagging the order.
 
-                    if is_stateless_confirm:
-                        print(f"   ✅ Confirmed (Stateless)! Tagging ID 5.")
-                        add_contact_tag(phone, 5)
-                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                        continue
+                    if context_whatsapp_id:
+                        print(f"   🕵️ [FAILSAFE] Context found. Checking for confirmation...")
+                        is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
 
+                        if is_stateless_confirm:
+                            print(f"   ✅ Confirmed (Stateless Context)! Tagging ID 5.")
+                            add_contact_tag(phone, 5)
+                            PENDING_DESIGN_CONFIRMATION.pop(phone, None)
+                            continue
                 # -----------------------------------------------------
                 # 🤖 4. FALLBACK: GENERAL AUTOMATION
                 # -----------------------------------------------------
@@ -3311,6 +3330,110 @@ def external_send_order():
         return jsonify({"error": str(e)}), 500
 
 
+# ==========================================
+# 🟢 API: SEND ORDER RETURNED TEMPLATE
+# ==========================================
+@app.route("/api/external/order_returned", methods=["POST"])
+def external_order_returned():
+    try:
+        # 1. Security Check
+        incoming_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("API_SECRET", "default_secret")
+        if incoming_key != expected_key:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        # 2. Get Data
+        data = request.get_json(silent=True) or {}
+
+        phone = normalize_phone(data.get("phone"))
+        customer_name = str(data.get("name", "Customer")).strip()
+        order_id = str(data.get("order_id", "")).strip()
+        courier_name = str(data.get("courier", "Leopards")).strip()
+        tracking_number = str(data.get("tracking", "")).strip()
+        address = str(data.get("address", "")).strip()
+        mobile_on_parcel = str(data.get("mobile_on_parcel", "")).strip()
+
+        if not phone or not order_id:
+             return jsonify({"error": "Missing phone or order_id"}), 400
+
+        # 3. Get WhatsApp Creds
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id, phone_number_id, access_token FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
+        acc = cur.fetchone()
+        cur.close(); conn.close()
+
+        if not acc:
+            return jsonify({"error": "No WhatsApp account connected"}), 500
+
+        # 4. Prepare Meta Payload
+        url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+        headers = {
+            "Authorization": f"Bearer {acc['access_token']}",
+            "Content-Type": "application/json"
+        }
+
+        # Template Name must match EXACTLY what is in Meta (e.g., "order_returned_alert")
+        # Replace 'order_returned_alert' with your ACTUAL template name from Meta
+        template_name = "order_returned"
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": phone,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": "en"}, # or en_US
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": customer_name},    # {{1}}
+                            {"type": "text", "text": order_id},         # {{2}}
+                            {"type": "text", "text": courier_name},     # {{3}}
+                            {"type": "text", "text": tracking_number},  # {{4}}
+                            {"type": "text", "text": address},          # {{5}}
+                            {"type": "text", "text": mobile_on_parcel}  # {{6}}
+                        ]
+                    },
+                    # Buttons don't need parameters unless they are dynamic
+                    # We just define the sub_type to ensure buttons render
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": 0, # Reship Order
+                        "parameters": [{"type": "payload", "payload": f"RESHIP_{order_id}"}]
+                    },
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": 1, # Cancel Order
+                        "parameters": [{"type": "payload", "payload": f"CANCEL_{order_id}"}]
+                    }
+                ]
+            }
+        }
+
+        # 5. Send
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+
+        # 6. Save to DB
+        msg_body = f"Order Returned Alert sent to {customer_name} for Order #{order_id}"
+        wa_id = resp.json().get("messages", [{}])[0].get("id")
+
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (
+                whatsapp_account_id, user_phone, sender, message, whatsapp_id, status, message_kind, template_name, timestamp
+            ) VALUES (%s, %s, 'agent', %s, %s, 'sent', 'template', %s, NOW())
+        """, (acc['id'], phone, msg_body, wa_id, template_name))
+        conn.commit(); cur.close(); conn.close()
+
+        return jsonify(resp.json())
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 ###########
 ###templater syncing
 
@@ -3836,54 +3959,67 @@ def detect_design_intent(text):
 def detect_design_intent(user_text, agent_message=None):
     t = user_text.lower()
 
-    # 🟢 1. CONTEXT CHECK: Did the Agent ask a question?
-    # If agent asked about color/shade/change, and user says "Yes/Ok", it is a discussion, not confirmation.
+    # 🟢 1. CONTEXT CHECK
     if agent_message:
         a_msg = agent_message.lower()
         if "?" in a_msg or "want" in a_msg:
-            # Keywords in agent's question that imply a design discussion
             discussion_triggers = ["color", "colour", "shade", "font", "size", "change", "adjust", "bold", "remove"]
             if any(k in a_msg for k in discussion_triggers):
                 return "manual_discussion"
 
+    # 🟢 2. KEYWORDS (Using Regex for Safety)
 
-    # 1. Layout
+    # Helper to check WHOLE words only (Prevents "delivered" matching "red")
+    def matches(keywords, text):
+        pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
+        return bool(re.search(pattern, text))
+
     layout_keywords = [
         "move", "left", "right", "center", "centre", "align",
         "top", "bottom", "up", "down", "corner", "side", "position",
-        "overlap", "separat", "space", "fasla" # Roman Urdu for distance
+        "overlap", "separat", "space", "fasla", "adjust", "lines",
+        "lower", "higher", "above", "below"
     ]
 
-    # 2. Typography (Fonts/Size)
     typography_keywords = [
         "font", "size", "bigger", "smaller", "bold", "thin",
-        "readable", "clear", "bara" # 'bara' usually implies size unless specific to text
+        "readable", "clear", "bara"
     ]
 
-    # 3. Color
     color_keywords = [
         "color", "colour", "red", "gold", "golden", "black", "white",
-        "blue", "green", "shade", "light", "dark", "colorless"
+        "blue", "green", "shade", "light", "dark", "colorless",
+        "blurry", "bad", "jumbled", "wrong", "mistake", "issue", "problem",
+        "expensive"
     ]
 
-    # 4. Text Content
     text_change_keywords = [
         "change", "edit", "replace", "write", "spell", "correct",
         "rename", "add", "remove", "delete", "text", "spelling",
-        "likhna", "likh", "naam", "name", "hata", "hatadein", "khatam", # 🟢 Added Urdu
-        "capital", "uppercase", "upper", "lowercase", "lower", "small", "chota"
+        "likhna", "likh", "naam", "name",
+        "capital", "uppercase", "upper", "lowercase", "lower", "small", "chota",
+        "instead"
     ]
 
-    # 5. Quality/Issues (New)
-    issue_keywords = [
-        "blurry", "bad", "jumbled", "wrong", "mistake", "issue", "problem"
+    design_swap_keywords = [
+        "different", "design", "new", "card", "cards",
+        "sample", "add", "want"
     ]
 
-    if any(k in t for k in layout_keywords): return "layout"
-    if any(k in t for k in typography_keywords): return "typography"
-    if any(k in t for k in color_keywords): return "color"
-    if any(k in t for k in issue_keywords): return "color" # Route issues to same manual bucket
-    if any(k in t for k in text_change_keywords): return "text"
+    # 🟢 NEW: Delivery / Status Keywords
+    delivery_keywords = [
+        "delivery", "deliver", "days", "received", "receive",
+        "time", "late", "status", "tracking", "parcel", "arrived",
+        "urgent", "soon", "tomorrow", "today"
+    ]
+
+    # CHECKING (Priority Order)
+    if matches(layout_keywords, t): return "layout"
+    if matches(delivery_keywords, t): return "delivery_query" # New Intent
+    if matches(design_swap_keywords, t): return "design_swap"
+    if matches(typography_keywords, t): return "typography"
+    if matches(color_keywords, t): return "color"
+    if matches(text_change_keywords, t): return "text"
 
     return "unknown"
 
