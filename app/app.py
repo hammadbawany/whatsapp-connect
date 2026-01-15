@@ -301,7 +301,7 @@ def webhook():
                     # A. Manual Discussion (Agent asked question, User answered)
                     if intent == "manual_discussion":
                         print("🎨 Contextual Discussion detected. Tagging Agent.")
-                        add_contact_tag(phone, 9)
+                        #add_contact_tag(phone, 9)
                         continue
 
                     # B. Text Changes (Automated)
@@ -329,16 +329,16 @@ def webhook():
                     # C. DELIVERY / GENERAL QUERIES (New)
                     elif intent == "delivery_query":
                         print("🚚 Delivery Query Detected. Tagging Agent.")
-                        add_contact_tag(phone, 9) # Tag for Human
-                        send_text_internal(phone, "🕒 I have notified the team about your delivery request. They will check the status and reply shortly.")
+                        #add_contact_tag(phone, 9) # Tag for Human
+                        #send_text_internal(phone, "🕒 I have notified the team about your delivery request. They will check the status and reply shortly.")
                         continue
 
                     # D. Manual Design Edits
                     elif intent in ["typography", "color", "design_swap"]:
                         print(f"🎨 Manual Request ({intent}). Tagging Agent.")
-                        add_contact_tag(phone, 9)
+                        #add_contact_tag(phone, 9)
                         msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "Let me get back to you."
-                        send_text_internal(phone, msg_reply)
+                        #send_text_internal(phone, msg_reply)
                         continue
 
                     # E. Layout (Semi-Automated)
@@ -347,10 +347,10 @@ def webhook():
                         from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
                         if success:
-                            send_text_internal(phone, "🔄 Adjusting the layout for you...Let me edit and show you")
+                        #    send_text_internal(phone, "🔄 Adjusting the layout for you...Let me edit and show you")
                         else:
-                            add_contact_tag(phone, 9)
-                            send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
+                            #add_contact_tag(phone, 9)
+                            #send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
                         continue
 
                 # -----------------------------------------------------
@@ -3956,69 +3956,86 @@ def external_send_shipment():
 
 def detect_design_intent(text):
     t = text.lower()
-def detect_design_intent(user_text, agent_message=None):
-    t = user_text.lower()
 
-    # 🟢 1. CONTEXT CHECK
+def detect_design_intent(text, agent_message=None):
+    t = text.lower()
+
+    # 1. Context Check (Agent asked a question?)
     if agent_message:
         a_msg = agent_message.lower()
         if "?" in a_msg or "want" in a_msg:
-            discussion_triggers = ["color", "colour", "shade", "font", "size", "change", "adjust", "bold", "remove"]
-            if any(k in a_msg for k in discussion_triggers):
+            triggers = ["color", "font", "size", "change", "adjust"]
+            if any(k in a_msg for k in triggers):
                 return "manual_discussion"
 
-    # 🟢 2. KEYWORDS (Using Regex for Safety)
-
-    # Helper to check WHOLE words only (Prevents "delivered" matching "red")
+    # Helper for Whole Word Matching
     def matches(keywords, text):
         pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
         return bool(re.search(pattern, text))
 
+    # ----------------------------------
+    # 🟢 KEYWORD LISTS
+    # ----------------------------------
+
+    # Layout (Automated/Semi)
     layout_keywords = [
-        "move", "left", "right", "center", "centre", "align",
-        "top", "bottom", "up", "down", "corner", "side", "position",
-        "overlap", "separat", "space", "fasla", "adjust", "lines",
+        "move", "shift", "left", "right", "center", "centre", "align",
+        "top", "bottom", "up", "down", "corner", "side",
+        "overlap", "separate", "space", "gap", "fasla", "adjust", "line", "lines",
         "lower", "higher", "above", "below"
     ]
 
-    typography_keywords = [
-        "font", "size", "bigger", "smaller", "bold", "thin",
-        "readable", "clear", "bara"
+    # Delivery Queries (Manual)
+    delivery_keywords = [
+        "delivery", "deliver", "received", "receive", "arrive",
+        "track", "tracking", "status", "parcel", "dispatched", "shipped",
+        "late", "urgent", "soon", "tomorrow", "today", "date",
+        "kab", "milay", "pohnch", "days", "time", "when"
     ]
 
+    # Typography (Manual)
+    typography_keywords = [
+        "font", "fonts", "size", "bigger", "smaller", "bold", "thin",
+        "italic", "readable", "clear", "visible", "bara", "chota"
+    ]
+
+    # Color (Manual)
+    # Removed "design" from here to prevent confusion
     color_keywords = [
         "color", "colour", "red", "gold", "golden", "black", "white",
-        "blue", "green", "shade", "light", "dark", "colorless",
-        "blurry", "bad", "jumbled", "wrong", "mistake", "issue", "problem",
-        "expensive"
+        "blue", "green", "pink", "shade", "light", "dark", "faded"
     ]
 
+    # Text Changes (Automated)
+    # Includes casing commands
     text_change_keywords = [
-        "change", "edit", "replace", "write", "spell", "correct",
-        "rename", "add", "remove", "delete", "text", "spelling",
-        "likhna", "likh", "naam", "name",
-        "capital", "uppercase", "upper", "lowercase", "lower", "small", "chota",
-        "instead"
+        "change", "edit", "replace", "write", "spell", "correct", "fix",
+        "rename", "remove", "delete", "add", "include", "text", "spelling",
+        "likhna", "likh", "naam", "name", "hata", "khatam",
+        "capital", "uppercase", "upper", "lowercase", "lower", "small"
     ]
 
+    # 🔴 Design Swap / Major Changes (Manual)
+    # STRICTER NOW: Must imply a switch or specific issue
     design_swap_keywords = [
-        "different", "design", "new", "card", "cards",
-        "sample", "add", "want"
+        "change design", "different design", "new design", "wrong design",
+        "change card", "different card", "wrong card",
+        "design number", "design no", "model", "sample",
+        "cancel", "return", "refund", "exchange",
+        "mistake"
     ]
 
-    # 🟢 NEW: Delivery / Status Keywords
-    delivery_keywords = [
-        "delivery", "deliver", "days", "received", "receive",
-        "time", "late", "status", "tracking", "parcel", "arrived",
-        "urgent", "soon", "tomorrow", "today"
-    ]
+    # ----------------------------------
+    # 🔍 CHECKS
+    # ----------------------------------
 
-    # CHECKING (Priority Order)
     if matches(layout_keywords, t): return "layout"
-    if matches(delivery_keywords, t): return "delivery_query" # New Intent
+    if matches(delivery_keywords, t): return "delivery_query"
     if matches(design_swap_keywords, t): return "design_swap"
     if matches(typography_keywords, t): return "typography"
     if matches(color_keywords, t): return "color"
+
+    # Text changes are the most common "edit", check last
     if matches(text_change_keywords, t): return "text"
 
     return "unknown"
