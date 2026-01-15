@@ -3339,6 +3339,9 @@ def external_send_order():
 # ==========================================
 @app.route("/api/external/order_returned", methods=["POST"])
 def external_order_returned():
+    print("\n" + "="*50)
+    print("🚀 [API] external_order_returned Triggered")
+
     try:
         # 1. Security Check
         incoming_key = request.headers.get("X-API-Key")
@@ -3357,6 +3360,8 @@ def external_order_returned():
         address = str(data.get("address", "")).strip()
         mobile_on_parcel = str(data.get("mobile_on_parcel", "")).strip()
 
+        print(f"📦 Data Received: {json.dumps(data, indent=2)}")
+
         if not phone or not order_id:
              return jsonify({"error": "Missing phone or order_id"}), 400
 
@@ -3368,6 +3373,7 @@ def external_order_returned():
         cur.close(); conn.close()
 
         if not acc:
+            print("❌ No WhatsApp Account Found")
             return jsonify({"error": "No WhatsApp account connected"}), 500
 
         # 4. Prepare Meta Payload
@@ -3377,8 +3383,6 @@ def external_order_returned():
             "Content-Type": "application/json"
         }
 
-        # Template Name must match EXACTLY what is in Meta (e.g., "order_returned_alert")
-        # Replace 'order_returned_alert' with your ACTUAL template name from Meta
         template_name = "order_returned"
 
         payload = {
@@ -3387,7 +3391,7 @@ def external_order_returned():
             "type": "template",
             "template": {
                 "name": template_name,
-                "language": {"code": "en"}, # or en_US
+                "language": {"code": "en"}, # Check if this should be 'en_US'
                 "components": [
                     {
                         "type": "body",
@@ -3400,30 +3404,44 @@ def external_order_returned():
                             {"type": "text", "text": mobile_on_parcel}  # {{6}}
                         ]
                     },
-                    # Buttons don't need parameters unless they are dynamic
-                    # We just define the sub_type to ensure buttons render
                     {
                         "type": "button",
                         "sub_type": "quick_reply",
-                        "index": 0, # Reship Order
+                        "index": 0,
                         "parameters": [{"type": "payload", "payload": f"RESHIP_{order_id}"}]
                     },
                     {
                         "type": "button",
                         "sub_type": "quick_reply",
-                        "index": 1, # Cancel Order
+                        "index": 1,
                         "parameters": [{"type": "payload", "payload": f"CANCEL_{order_id}"}]
                     }
                 ]
             }
         }
 
+        print(f"📤 Sending Payload to Meta: {json.dumps(payload, indent=2)}")
+
         # 5. Send
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        resp_json = resp.json()
+
+        print(f"📥 Meta Response: {resp.status_code}")
+        print(json.dumps(resp_json, indent=2))
 
         # 6. Save to DB
-        msg_body = f"Order Returned Alert sent to {customer_name} for Order #{order_id}"
-        wa_id = resp.json().get("messages", [{}])[0].get("id")
+        # Construct Exact Message for DB (Matches Template)
+        # Note: You must ensure this text matches your actual template text
+        msg_body = (
+            f"Order Returned\n\n"
+            f"Hello {customer_name}\n"
+            f"Your order {order_id} from Lifafay.pk was returned by {courier_name} with tracking number {tracking_number}\n\n"
+            f"Please let me know if you want it. So we can reship it asap\n\n"
+            f"Please check delivery address: {address} and mobile number: {mobile_on_parcel}\n"
+            f"if there is a change - please let us know so we can update address and mobile no"
+        )
+
+        wa_id = resp_json.get("messages", [{}])[0].get("id")
 
         conn = get_conn(); cur = conn.cursor()
         cur.execute("""
@@ -3433,11 +3451,16 @@ def external_order_returned():
         """, (acc['id'], phone, msg_body, wa_id, template_name))
         conn.commit(); cur.close(); conn.close()
 
-        return jsonify(resp.json())
+        print("✅ Message Saved to DB")
+        print("="*50 + "\n")
+
+        return jsonify(resp_json)
 
     except Exception as e:
+        print(f"❌ Exception: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 ###########
 ###templater syncing
 
