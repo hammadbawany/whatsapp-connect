@@ -4197,3 +4197,35 @@ def add_contact_tag(phone, tag_id):
     except Exception as e:
         print(f"❌ Failed to tag user: {e}")
         return False
+
+
+@app.route("/api/clear_tags", methods=["POST"])
+def clear_tags():
+    try:
+        # Security
+        incoming_key = request.headers.get("X-API-Key")
+        expected_key = os.getenv("API_SECRET", "default_secret")
+        if incoming_key != expected_key:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        data = request.get_json()
+        phone = normalize_phone(data.get("phone"))
+
+        if not phone:
+            return jsonify({"error": "Missing phone"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # 🗑️ DELETE ALL TAGS for this contact
+        cur.execute("DELETE FROM contact_tags WHERE contact_phone = %s", (phone,))
+
+        conn.commit()
+        cur.close(); conn.close()
+
+        print(f"🗑️ Cleared all tags for {phone}")
+        return jsonify({"success": True})
+
+    except Exception as e:
+        print(f"❌ Clear Tags Error: {e}")
+        return jsonify({"error": str(e)}), 500
