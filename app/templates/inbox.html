@@ -714,6 +714,9 @@
     let pendingTemplateData = null; // Stores info while filling variables
 
     let lastTagStateSignature = "";
+    let currentChatContext = {
+        name: null
+    };
 
     // TIMERS
     let chatLoopTimer = null;
@@ -819,6 +822,8 @@
     }
 
     async function openChat(phone, name) {
+        currentChatContext.name = name || null;
+
         if (currentPhone === phone) return;
 
         // 1. Kill old processes
@@ -1297,15 +1302,27 @@
             const wrapper = document.createElement('div');
             const varLabel = '{' + '{' + varNum + '}' + '}';
 
+            let prefill = '';
+
+            // 🟢 AUTO-FILL NAME FOR {{1}}
+            if (varNum === '1' && currentChatContext.name) {
+                prefill = currentChatContext.name;
+            }
+
             wrapper.innerHTML =
                 '<label style="font-size:12px; color:#00a884; font-weight:bold;">' +
                     'Variable ' + varLabel +
                 '</label>' +
-                '<input type="text" class="var-input" data-index="' + varNum + '" ' +
-                'placeholder="Value for ' + varLabel + '">';
+                '<input ' +
+                    'type="text" ' +
+                    'class="var-input" ' +
+                    'data-index="' + varNum + '" ' +
+                    'value="' + prefill + '" ' +
+                    'placeholder="Value for ' + varLabel + '">';
 
             container.appendChild(wrapper);
         });
+
 
         closeModal('template-modal');
         document.getElementById('variable-modal').style.display = 'grid';
