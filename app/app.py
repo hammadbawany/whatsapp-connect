@@ -3398,7 +3398,6 @@ def external_order_returned():
                         "parameters": [
                             {"type": "text", "text": customer_name},    # {{1}}
                             {"type": "text", "text": order_id},         # {{2}}
-                            {"type": "text", "text": courier_name},     # {{3}}
                             {"type": "text", "text": tracking_number},  # {{4}}
                             {"type": "text", "text": address},          # {{5}}
                             {"type": "text", "text": mobile_on_parcel}  # {{6}}
