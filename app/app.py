@@ -2011,11 +2011,23 @@ def send_template():
 
 @app.route("/send_template", methods=["POST"])
 def send_template():
-    data = request.json
+    import json
+    import requests
+
+    data = request.json or {}
+
     phone = normalize_phone(data.get("phone"))
     template_name = data.get("template_name")
     language = data.get("language", "en_US")
     template_body = data.get("template_body", f"[Template: {template_name}]")
+    variables = data.get("variables", [])
+
+    print("\n================= 🟡 SEND TEMPLATE CALLED 🟡 =================")
+    print("Phone:", phone)
+    print("Template Name:", template_name)
+    print("Language:", language)
+    print("Variables:", variables)
+    print("Variable Count:", len(variables))
 
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -2027,7 +2039,9 @@ def send_template():
     acc = cur.fetchone()
 
     if not acc:
-        cur.close(); conn.close()
+        print("❌ No WhatsApp account found for WABA")
+        cur.close()
+        conn.close()
         return jsonify({"error": "No account"}), 400
 
     url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
@@ -2036,22 +2050,61 @@ def send_template():
         "Content-Type": "application/json"
     }
 
+    # Build components ONLY if variables exist
+    components = []
+    if variables:
+        components.append({
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": str(v)} for v in variables
+            ]
+        })
+
     payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "template",
         "template": {
             "name": template_name,
-            "language": {"code": language}
+            "language": {"code": language},
+            **({"components": components} if components else {})
         }
     }
 
-    resp = requests.post(url, headers=headers, json=payload).json()
-    wa_id = resp.get("messages", [{}])[0].get("id")
+    print("\n🟦 PAYLOAD SENT TO WHATSAPP 🟦")
+    print(json.dumps(payload, indent=2))
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload)
+    except Exception as e:
+        print("❌ HTTP REQUEST FAILED:", str(e))
+        cur.close()
+        conn.close()
+        return jsonify({"error": "WhatsApp request failed"}), 500
+
+    print("\n🟥 WHATSAPP HTTP STATUS 🟥")
+    print(resp.status_code)
+
+    print("\n🟥 WHATSAPP RAW RESPONSE 🟥")
+    print(resp.text)
+
+    try:
+        resp_json = resp.json()
+    except Exception:
+        resp_json = {}
+
+    if "error" in resp_json:
+        print("\n❌ WHATSAPP ERROR OBJECT ❌")
+        print(json.dumps(resp_json["error"], indent=2))
+
+    wa_id = resp_json.get("messages", [{}])[0].get("id")
 
     if not wa_id:
-        print("❌ send_template: No whatsapp_id", resp)
+        print("\n❌ NO WHATSAPP MESSAGE ID RETURNED")
+    else:
+        print("\n✅ WHATSAPP MESSAGE ID:", wa_id)
 
+    # Store message in DB (even if WA fails, for visibility)
     cur.execute("""
         INSERT INTO messages (
             whatsapp_account_id,
@@ -2071,7 +2124,10 @@ def send_template():
     ))
 
     conn.commit()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
+
+    print("================= 🟢 SEND TEMPLATE END 🟢 =================\n")
 
     return jsonify({"success": True})
 

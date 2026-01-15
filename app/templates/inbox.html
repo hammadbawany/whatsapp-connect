@@ -687,7 +687,21 @@
         </div>
     </div>
 </div>
+<!-- 🟢 NEW: VARIABLE INPUT MODAL -->
+<div class="modal-overlay" id="variable-modal">
+    <div class="modal" style="width: 400px;">
+        <h3>Fill Template Details</h3>
+        <p id="var-template-preview" style="font-size:12px; color:#8696a0; margin-bottom:15px; font-style:italic;"></p>
 
+        <!-- Inputs will be generated here -->
+        <div id="variable-inputs-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+
+        <div class="modal-buttons" style="margin-top:20px;">
+            <button class="btn btn-sec" onclick="closeModal('variable-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="submitTemplateVariables()">Send Now</button>
+        </div>
+    </div>
+</div>
 
 <script>
     // ==========================================
@@ -697,6 +711,7 @@
     let availableTags = [];
     let taggingPhone = null;
     let lastTagInteraction = 0;
+    let pendingTemplateData = null; // Stores info while filling variables
 
     let lastTagStateSignature = "";
 
@@ -1236,9 +1251,152 @@
     function showSlashPopup(q) { const p=document.getElementById('slash-popup'); const f=quickReplies.filter(qr=>qr.shortcut.toLowerCase().includes(q.toLowerCase())); if(f.length===0){p.style.display='none';return;} p.innerHTML=''; f.forEach(qr=>{ const d=document.createElement('div'); d.className='slash-item'; d.innerHTML=`<span class="slash-shortcut">/${qr.shortcut}</span> ${qr.message.substring(0,50)}`; d.onclick=()=>{ msgInputEl.value=msgInputEl.value.substring(0,msgInputEl.value.lastIndexOf('/'))+qr.message; p.style.display='none'; msgInputEl.focus(); checkInput(); }; p.appendChild(d); }); p.style.display='block'; }
 
     async function openTemplateModal() { document.getElementById('template-modal').style.display = 'grid'; const l = document.getElementById('template-list'); l.innerHTML = 'Loading...'; try { const r = await fetch('/template_aliases'); const d = await r.json(); allTemplates = d.filter(t => t.visible_in_ui === true); renderTemplates(allTemplates); } catch (e) { l.innerHTML = 'Error loading templates'; } }
-    function renderTemplates(templates) { const list = document.getElementById('template-list'); list.innerHTML = ''; if (!templates || templates.length === 0) { list.innerHTML = 'No templates'; return; } templates.forEach(t => { const div = document.createElement('div'); div.className = 'template-item'; let preview = (t.preview_text || '').split('\n').slice(0, 4).join('<br>'); div.innerHTML = `<div class="template-name">${t.internal_name}</div><div class="template-body">${preview}</div>`; div.onclick = () => sendTemplate(t.meta_template_name, t.language_code, t.preview_text || ''); list.appendChild(div); }); }
+    function renderTemplates(templates) {
+        const list = document.getElementById('template-list');
+        list.innerHTML = '';
+        if (!templates || templates.length === 0) {
+            list.innerHTML = '<div style="padding:10px;color:#8696a0;">No templates found</div>';
+            return;
+        }
+        templates.forEach(t => {
+            const div = document.createElement('div');
+            div.className = 'template-item';
+            let preview = (t.preview_text || '').split('\n').slice(0, 4).join('<br>');
+            div.innerHTML = `<div class="template-name">${t.internal_name}</div><div class="template-body">${preview}</div>`;
+
+            // 🔥 CHANGED: Call checkVariables instead of send directly
+            div.onclick = () => checkTemplateVariables(t.meta_template_name, t.language_code, t.preview_text || '');
+            list.appendChild(div);
+        });
+    }
+
+    function checkTemplateVariables(name, lang, bodyText) {
+        const regex = /\{\{(\d+)\}\}/g;
+        const matches = [...bodyText.matchAll(regex)];
+
+        if (matches.length === 0) {
+            if (!confirm(`Send "${name}"?`)) return;
+            closeModal('template-modal');
+            executeSendTemplate(name, lang, bodyText, []);
+            return;
+        }
+
+        pendingTemplateData = { name, lang, bodyText };
+
+        const container = document.getElementById('variable-inputs-container');
+        container.innerHTML = '';
+
+        document.getElementById('var-template-preview').innerHTML =
+            bodyText.replace(/\{\{(\d+)\}\}/g, function (_, num) {
+                return '<b style="color:#25D366;">' + '{' + '{' + num + '}' + '}' + '</b>';
+            });
+
+        const uniqueVars = new Set(matches.map(m => m[1]));
+
+        uniqueVars.forEach(varNum => {
+            const wrapper = document.createElement('div');
+            const varLabel = '{' + '{' + varNum + '}' + '}';
+
+            wrapper.innerHTML =
+                '<label style="font-size:12px; color:#00a884; font-weight:bold;">' +
+                    'Variable ' + varLabel +
+                '</label>' +
+                '<input type="text" class="var-input" data-index="' + varNum + '" ' +
+                'placeholder="Value for ' + varLabel + '">';
+
+            container.appendChild(wrapper);
+        });
+
+        closeModal('template-modal');
+        document.getElementById('variable-modal').style.display = 'grid';
+
+        setTimeout(() => container.querySelector('input')?.focus(), 100);
+    }
+
+
+function submitTemplateVariables() {
+    if (!pendingTemplateData) return;
+
+    // 1. Gather values
+    const inputs = document.querySelectorAll('.var-input');
+    const variables = [];
+    let missing = false;
+
+    // We need to map inputs back to an ordered array [val1, val2, val3]
+    // Meta expects parameters in order: parameters[0] is {{1}}, parameters[1] is {{2}}
+
+    // Sort inputs by data-index to ensure order
+    const sortedInputs = Array.from(inputs).sort((a, b) => a.dataset.index - b.dataset.index);
+
+    sortedInputs.forEach(input => {
+        const val = input.value.trim();
+        if (!val) {
+            input.style.border = "1px solid red";
+            missing = true;
+        } else {
+            input.style.border = "none";
+            variables.push(val);
+        }
+    });
+
+    if (missing) return; // Don't send empty vars
+
+    // 2. Close and Send
+    closeModal('variable-modal');
+    executeSendTemplate(
+        pendingTemplateData.name,
+        pendingTemplateData.lang,
+        pendingTemplateData.bodyText,
+        variables
+    );
+    pendingTemplateData = null;
+}
+
+async function executeSendTemplate(name, lang, bodyText, variableArray) {
+    isSending = true;
+
+    let displayBody = bodyText;
+
+    variableArray.forEach((val, index) => {
+        const token = '{' + '{' + (index + 1) + '}' + '}';
+        displayBody = displayBody.replace(token, '<b>' + val + '</b>');
+    });
+
+    const formatted = displayBody.replace(/\n/g, '<br>');
+
+    document.getElementById('messages').insertAdjacentHTML(
+        'beforeend',
+        `<div class="msg sent">${formatted}
+         <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`
+    );
+
+    document.getElementById('messages').scrollTop =
+        document.getElementById('messages').scrollHeight;
+
+    try {
+        await fetch('/send_template', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phone: currentPhone,
+                template_name: name,
+                language: lang,
+                template_body: displayBody,
+                variables: variableArray
+            })
+        });
+    } catch (e) {
+        alert("Failed to send template");
+        console.error(e);
+    }
+
+    setTimeout(() => {
+        isSending = false;
+        refreshChat(false);
+    }, 2000);
+}
+
     function filterTemplates() { const q = document.getElementById('template-search').value.toLowerCase(); renderTemplates(allTemplates.filter(t => t.internal_name.toLowerCase().includes(q))); }
-    async function sendTemplate(n,l,c) { if(!confirm(`Send "${n}"?`)) return; closeModal('template-modal'); isSending=true; const formatted = c.replace(/\n/g,'<br>'); document.getElementById('messages').insertAdjacentHTML('beforeend',`<div class="msg sent">${formatted} <div class="msg-meta">Now ${getTickHtml('sent')}</div></div>`); document.getElementById('messages').scrollTop=document.getElementById('messages').scrollHeight; try{await fetch('/send_template',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:currentPhone,template_name:n,language:l,template_body:c})});}catch(e){alert("Failed");} setTimeout(()=>{isSending=false;refreshChat(false);},2000); }
 
     // --- UPLOADS ---
     function toggleAttach() { if (!isSessionActive()) { alert("Session expired."); return; } const m = document.getElementById('attach-menu'); m.style.display = m.style.display === 'flex' ? 'none' : 'flex'; }
