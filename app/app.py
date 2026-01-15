@@ -347,8 +347,12 @@ def webhook():
                         from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
                         if success:
+                            print("🚚 layout Detected. Tagging Agent.")
+
                         #    send_text_internal(phone, "🔄 Adjusting the layout for you...Let me edit and show you")
                         else:
+                            print("🚚 layout fail. Tagging Agent.")
+
                             #add_contact_tag(phone, 9)
                             #send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
                         continue
