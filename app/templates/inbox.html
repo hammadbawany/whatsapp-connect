@@ -1267,10 +1267,39 @@
 
       // 3. Filter Logic (Standard)
       const filtered = allChats.filter(c => {
-          if (currentFilter === 'unread') return c.unread_count > 0;
-          if (currentFilter === 'all') return true;
-          if (currentFilter === 'none') return !c.tags || c.tags.length === 0;
-          if (c.tags && c.tags.some(t => t.name === currentFilter)) return true;
+
+          const unread = (c.unread_count || 0) > 0;
+          const tags = (c.tags || []).map(t => t.name);
+
+          const isUntagged = tags.length === 0;
+
+          const isSpecialTag =
+              tags.includes("Follow Up") ||
+              tags.includes("Update Bill") ||
+              tags.includes("Returns");
+
+          // 🔹 UNREAD FILTER
+          if (currentFilter === 'unread') {
+              return unread;
+          }
+
+          // 🔹 ALL FILTER
+          if (currentFilter === 'all') {
+              return true;
+          }
+
+          // 🔹 UNTAGGED FILTER (this is 'none' in your app)
+          if (currentFilter === 'none') {
+              // 1️⃣ Untagged + unread
+              // 2️⃣ OR any special tagged chat (read or unread)
+              return (isUntagged && unread) || isSpecialTag;
+          }
+
+          // 🔹 NORMAL TAG FILTER
+          if (tags.includes(currentFilter)) {
+              return true;
+          }
+
           return false;
       });
 
@@ -1833,50 +1862,62 @@ function renderTagFilters() {
     const tagCounts = {};
     let untaggedCount = 0;
 
-    // Initialize to 0
+    // Initialize tag counters
     availableTags.forEach(t => tagCounts[t.name] = 0);
 
     // Count chats
-        allChats.forEach(c => {
-            // Determine if chat is unread (using same logic as chat list)
-            const isLocallyUnread = locallyMarkedUnread.has(c.phone);
-            const unreadVal = isLocallyUnread ? Math.max(1, c.unread_count || 0) : (c.unread_count || 0);
+    allChats.forEach(c => {
 
-            if (!c.tags || c.tags.length === 0) {
-                // ONLY increment untagged count if the chat is Unread
-                if (unreadVal > 0) {
-                    untaggedCount++;
-                }
+        // Determine unread (same logic as chat list)
+        const isLocallyUnread = locallyMarkedUnread.has(c.phone);
+        const unreadVal = isLocallyUnread
+            ? Math.max(1, c.unread_count || 0)
+            : (c.unread_count || 0);
+
+        const tagNames = (c.tags || []).map(t => t.name);
+
+        const isUntagged = tagNames.length === 0;
+
+        const isSpecialTag =
+            tagNames.includes("Follow Up") ||
+            tagNames.includes("Update Bill") ||
+            tagNames.includes("Returns");
+
+        // ✅ UNTAPPED FILTER BADGE LOGIC
+        // 1) Untagged + unread
+        // 2) OR special tags (read or unread)
+
+        if ((isUntagged && unreadVal > 0) || isSpecialTag) {
+            untaggedCount++;
+        }
+
+        // ✅ NORMAL TAG BADGES (unchanged)
+        tagNames.forEach(t => {
+            if (tagCounts[t] !== undefined) {
+                tagCounts[t]++;
             } else {
-                // For named tags, we usually count Total chats (or you can change this to unread too if desired)
-                // Keeping named tags as "Total" for now, based on standard behavior.
-                c.tags.forEach(t => {
-                    if (tagCounts[t.name] !== undefined) {
-                        tagCounts[t.name]++;
-                    } else {
-                        tagCounts[t.name] = 1;
-                    }
-                });
+                tagCounts[t] = 1;
             }
         });
+    });
 
-    // 🟢 2. SMART CHECK: Create a "signature" of the current state
-    // This string changes ONLY if counts change, or the active filter changes, or tags change.
-    const currentSignature = JSON.stringify(tagCounts) + `|Untagged:${untaggedCount}|Active:${currentFilter}|TotalTags:${availableTags.length}`;
+    // 🟢 Signature optimization (prevent unnecessary re-render)
+    const currentSignature =
+        JSON.stringify(tagCounts) +
+        `|Untagged:${untaggedCount}|Active:${currentFilter}|TotalTags:${availableTags.length}`;
 
-    // If nothing changed since the last render, STOP here.
     if (currentSignature === lastTagStateSignature) {
         return;
     }
 
-    // Save the new signature for next time
     lastTagStateSignature = currentSignature;
 
-    // 3. Render DOM (Only runs if data changed)
+    // 3. Render DOM
     container.innerHTML = '';
 
     // -- Untagged Chip --
     const noneActive = currentFilter === 'none';
+
     const noneBadge = untaggedCount > 0
         ? `<span class="filter-badge">${untaggedCount}</span>`
         : '';
@@ -1884,11 +1925,15 @@ function renderTagFilters() {
     const noneChip = document.createElement('div');
     noneChip.className = `filter-chip ${noneActive ? 'active' : ''}`;
     noneChip.innerHTML = `Untagged ${noneBadge}`;
-    noneChip.onclick = function() { setFilter('none', this); };
+    noneChip.onclick = function () {
+        setFilter('none', this);
+    };
+
     container.appendChild(noneChip);
 
     // -- Tag Chips --
     availableTags.forEach(tag => {
+
         const count = tagCounts[tag.name] || 0;
         const isActive = currentFilter === tag.name;
 
@@ -1899,7 +1944,9 @@ function renderTagFilters() {
         const chip = document.createElement('div');
         chip.className = `filter-chip ${isActive ? 'active' : ''}`;
         chip.innerHTML = `${tag.name} ${badgeHtml}`;
-        chip.onclick = function() { setFilter(tag.name, this); };
+        chip.onclick = function () {
+            setFilter(tag.name, this);
+        };
 
         container.appendChild(chip);
     });
