@@ -27,7 +27,7 @@ EXTERNAL_DB_URL = "postgresql://u8crgmufmb2vp9:p9eb3995b1650b4c908cb98ca407a7300
 
 def get_remote_order_details(missing_codes):
     print(f"\n[REMOTE DB] 🔌 Connecting to fetch {len(missing_codes)} codes...")
-    print(f"[REMOTE DB] Codes to find: {missing_codes}")
+    print(f"[REMOTE DB] Codes to find:", missing_codes)
 
     fetched_data = {}
     remote_conn = None
@@ -38,9 +38,13 @@ def get_remote_order_details(missing_codes):
 
         format_strings = ','.join(['%s'] * len(missing_codes))
 
-        # NOTE: Ensure table name is 'orders' and column is 'order_id'
         query = f"""
-            SELECT order_id, customer_phone, customer_address, customer_city
+            SELECT
+                order_id,
+                customer_phone,
+                customer_name,
+                customer_address,
+                customer_city
             FROM orders
             WHERE CAST(order_id AS TEXT) IN ({format_strings})
         """
@@ -48,28 +52,25 @@ def get_remote_order_details(missing_codes):
         cur.execute(query, tuple(missing_codes))
         rows = cur.fetchall()
 
-        print(f"[REMOTE DB] ✅ Success! Found {len(rows)} records.")
+        print(f"[REMOTE DB] ✅ Found {len(rows)} records")
 
         for row in rows:
-            # Handle both dict and tuple returns just in case
-            if isinstance(row, dict):
-                code = str(row['order_id'])
-                data = {
-                    'phone': row['customer_phone'],
-                    'address': row['customer_address'],
-                    'city': row['customer_city']
-                }
-            else:
-                code = str(row[0])
-                data = {'phone': row[1], 'address': row[2], 'city': row[3]}
+            code = str(row["order_id"])
 
-            fetched_data[code] = data
-            print(f"   -> Found Code {code}: {data['city']}")
+            fetched_data[code] = {
+                "phone": row.get("customer_phone"),
+                "name": row.get("customer_name"),
+                "address": row.get("customer_address"),
+                "city": row.get("customer_city")
+            }
+
+            print(f"   → {code} | {row.get('customer_name')} | {row.get('customer_city')}")
 
         cur.close()
 
     except Exception as e:
-        print(f"[REMOTE DB] ❌ CONNECTION ERROR: {e}")
+        print("[REMOTE DB] ❌ ERROR:", e)
+
     finally:
         if remote_conn:
             remote_conn.close()
@@ -78,80 +79,211 @@ def get_remote_order_details(missing_codes):
 
 def sync_order_details(order_codes):
     """
-    1. Checks LOCAL cache.
-    2. Fetches MISSING from REMOTE DB.
-    3. Updates LOCAL cache.
-    4. Returns dictionary {code: {'address':..., 'city':..., 'phone':...}}
+    1. Check LOCAL cache
+    2. Fetch MISSING from REMOTE DB
+    3. Update LOCAL cache
+    4. Return dictionary:
+       {
+         order_code: {
+           phone,
+           name,
+           address,
+           city
+         }
+       }
     """
-    # Filter out None/Empty codes
+
     valid_codes = [str(c) for c in order_codes if c]
-    if not valid_codes: return {}
+    if not valid_codes:
+        return {}
 
-    conn = get_conn() # Your local DB connection
-    cur = conn.cursor()
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # 1. Check Local Cache
+    # 1️⃣ LOCAL CACHE CHECK
     format_strings = ','.join(['%s'] * len(valid_codes))
+
     query = f"""
-        SELECT order_code, customer_phone, customer_address, customer_city
+        SELECT
+            order_code,
+            customer_phone,
+            customer_name,
+            customer_address,
+            customer_city
         FROM cached_order_info
         WHERE order_code IN ({format_strings})
     """
+
     cur.execute(query, tuple(valid_codes))
 
     local_results = {}
     found_codes = set()
 
     for row in cur.fetchall():
-        # Handle tuple or dict return depending on your get_conn configuration
-        if isinstance(row, dict):
-            code = row['order_code']
-            data = {'phone': row['customer_phone'], 'address': row['customer_address'], 'city': row['customer_city']}
-        else:
-            code = row[0]
-            data = {'phone': row[1], 'address': row[2], 'city': row[3]}
+        code = row["order_code"]
 
-        local_results[code] = data
+        local_results[code] = {
+            "phone": row["customer_phone"],
+            "name": row["customer_name"],
+            "address": row["customer_address"],
+            "city": row["customer_city"]
+        }
+
         found_codes.add(code)
 
-    # 2. Identify Missing
+    # 2️⃣ FIND MISSING
     missing_codes = [c for c in valid_codes if c not in found_codes]
 
-    # 3. Fetch Remote (Only if needed)
+    # 3️⃣ REMOTE FETCH IF NEEDED
     if missing_codes:
-        print(f"Fetching {len(missing_codes)} orders from Remote External DB...")
+        print(f"[CACHE MISS] Fetching {len(missing_codes)} orders from Remote DB")
+
         new_data = get_remote_order_details(missing_codes)
 
         if new_data:
             insert_values = []
-            for code, info in new_data.items():
-                # Add to results for immediate return
-                local_results[code] = info
-                # Prepare for DB Insert
-                insert_values.append((code, info.get('phone'), info.get('address'), info.get('city')))
 
-            # 4. Save to Local Cache (Upsert)
-            if insert_values:
-                upsert_query = """
-                    INSERT INTO cached_order_info (order_code, customer_phone, customer_address, customer_city)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (order_code) DO UPDATE SET
-                        customer_phone = EXCLUDED.customer_phone,
-                        customer_address = EXCLUDED.customer_address,
-                        customer_city = EXCLUDED.customer_city,
-                        updated_at = NOW()
-                """
-                try:
-                    cur.executemany(upsert_query, insert_values)
-                    conn.commit()
-                except Exception as e:
-                    print(f"Cache Insert Error: {e}")
-                    conn.rollback()
+            for code, info in new_data.items():
+
+                # merge into return result
+                local_results[code] = info
+
+                insert_values.append((
+                    code,
+                    info.get("phone"),
+                    info.get("name"),
+                    info.get("address"),
+                    info.get("city")
+                ))
+
+            # 4️⃣ UPSERT INTO CACHE
+            upsert_query = """
+                INSERT INTO cached_order_info
+                (order_code, customer_phone, customer_name, customer_address, customer_city)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (order_code) DO UPDATE SET
+                    customer_phone = EXCLUDED.customer_phone,
+                    customer_name  = EXCLUDED.customer_name,
+                    customer_address = EXCLUDED.customer_address,
+                    customer_city = EXCLUDED.customer_city,
+                    updated_at = NOW()
+            """
+
+            try:
+                cur.executemany(upsert_query, insert_values)
+                conn.commit()
+                print("[CACHE] ✅ Updated successfully")
+
+            except Exception as e:
+                print("[CACHE] ❌ Insert Error:", e)
+                conn.rollback()
 
     cur.close()
     conn.close()
 
     return local_results
+
+def sync_orders_by_phone(phone):
+    print("[INBOX SYNC] Looking up orders for:", phone)
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # 1️⃣ Try cache first
+    cur.execute("""
+        SELECT
+            order_code,
+            customer_phone,
+            customer_name,
+            customer_address,
+            customer_city,
+            updated_at
+        FROM cached_order_info
+        WHERE customer_phone LIKE %s
+          AND updated_at > NOW() - INTERVAL '7 days'
+        ORDER BY updated_at DESC
+    """, (f"%{phone[-10:]}",))
+
+    rows = cur.fetchall()
+
+    # If found → return immediately
+    if rows:
+        print("[INBOX SYNC] Cache HIT:", len(rows))
+        cur.close()
+        conn.close()
+        return rows
+
+    print("[INBOX SYNC] Cache MISS → querying Lifafay DB")
+
+    # 2️⃣ Remote fallback
+    remote_conn = psycopg2.connect(EXTERNAL_DB_URL)
+    rcur = remote_conn.cursor(cursor_factory=DictCursor)
+
+    rcur.execute("""
+        SELECT
+            order_id,
+            customer_phone,
+            customer_name,
+            customer_address,
+            customer_city
+        FROM orders
+        WHERE customer_phone LIKE %s
+        ORDER BY created_at DESC
+        LIMIT 5
+    """, (f"%{phone[-10:]}",))
+
+    remote_rows = rcur.fetchall()
+
+    insert_values = []
+    results = []
+
+    for row in remote_rows:
+        code = str(row["order_id"])
+
+        data = {
+            "order_code": code,
+            "customer_phone": row["customer_phone"],
+            "customer_name": row["customer_name"],
+            "customer_address": row["customer_address"],
+            "customer_city": row["customer_city"]
+        }
+
+        results.append(data)
+
+        insert_values.append((
+            code,
+            row["customer_phone"],
+            row["customer_name"],
+            row["customer_address"],
+            row["customer_city"]
+        ))
+
+    # 3️⃣ Save to cache
+    if insert_values:
+        cur.executemany("""
+            INSERT INTO cached_order_info
+            (order_code, customer_phone, customer_name, customer_address, customer_city)
+            VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (order_code) DO UPDATE SET
+                customer_phone = EXCLUDED.customer_phone,
+                customer_name = EXCLUDED.customer_name,
+                customer_address = EXCLUDED.customer_address,
+                customer_city = EXCLUDED.customer_city,
+                updated_at = NOW()
+        """, insert_values)
+
+        conn.commit()
+
+    # Cleanup
+    rcur.close()
+    remote_conn.close()
+    cur.close()
+    conn.close()
+
+    print("[INBOX SYNC] Remote fetched:", len(results))
+
+    return results
+
 
 
 # ==========================================

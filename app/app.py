@@ -12,7 +12,7 @@ import sys
 import os
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, DictCursor
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
@@ -41,6 +41,7 @@ from app.utils.logger import log
 from app.plugins.text_change_detector import (
     process_text_change_request,build_confirmation_message,resolve_text_delta,apply_delta,looks_like_text_content
 )
+from psycopg2.extras import DictCursor
 
 import socket
 import atexit
@@ -61,6 +62,7 @@ PHONE_NUMBER_ID = os.getenv("WA_PHONE")
 WABA_ID = os.getenv("WA_WABA_ID")
 
 PENDING_TEXT_CONFIRMATIONS = {}
+EXTERNAL_DB_URL = os.environ.get("LIFAFAY_DB_URL")
 
 APP_KEY = "lns4lbjw0ka6sen"
 REDIRECT_URI = os.getenv("DROPBOX_REDIRECT_URI")
@@ -3508,8 +3510,10 @@ def external_order_returned():
 
         print("✅ Message Saved to DB")
         print("="*50 + "\n")
+        add_contact_tag(phone, 4)
 
         return jsonify(resp_json)
+
 
     except Exception as e:
         print(f"❌ Exception: {e}")
@@ -4285,3 +4289,142 @@ def clear_tags():
     except Exception as e:
         print(f"❌ Clear Tags Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def get_remote_orders_by_phone(phone):
+    print("[REMOTE DB] Fetching orders for phone:", phone)
+
+    remote_conn = None
+    results = []
+
+    try:
+        remote_conn = psycopg2.connect(EXTERNAL_DB_URL)
+        cur = remote_conn.cursor(cursor_factory=DictCursor)
+
+        query = """
+            SELECT
+                order_code,
+                customer_phone,
+                customer_name,
+                customer_address,
+                customer_city,
+                order_date
+            FROM orders
+            WHERE REPLACE(REPLACE(REPLACE(customer_phone,' ',''),'-',''),'+','') LIKE %s
+            ORDER BY order_date DESC
+            LIMIT 5
+        """
+
+        cur.execute(query, (f"%{phone[-10:]}",))
+        rows = cur.fetchall()
+
+        print("[REMOTE DB] Rows found:", len(rows))
+
+        for row in rows:
+            results.append({
+                "order_code": str(row["order_code"]),
+                "phone": row["customer_phone"],
+                "name": row["customer_name"],
+                "address": row["customer_address"],
+                "city": row["customer_city"],
+                "order_date": row["order_date"]
+            })
+
+        cur.close()
+
+    except Exception as e:
+        print("[REMOTE DB] ERROR:", e)
+
+    finally:
+        if remote_conn:
+            remote_conn.close()
+
+    return results
+
+def sync_orders_by_phone(phone):
+    print("[CACHE SYNC] Syncing phone:", phone)
+
+    remote_orders = get_remote_orders_by_phone(phone)
+
+    if not remote_orders:
+        print("[CACHE SYNC] No remote orders found")
+        return []
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    insert_values = []
+
+    for o in remote_orders:
+        insert_values.append((
+            o["order_code"],
+            o["phone"],
+            o["name"],
+            o["address"],
+            o["city"],
+            o["order_date"]
+        ))
+
+    upsert_query = """
+        INSERT INTO cached_order_info
+        (order_code, customer_phone, customer_name, customer_address, customer_city, order_date)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (order_code) DO UPDATE SET
+            customer_phone = EXCLUDED.customer_phone,
+            customer_name = EXCLUDED.customer_name,
+            customer_address = EXCLUDED.customer_address,
+            customer_city = EXCLUDED.customer_city,
+            order_date = EXCLUDED.order_date,
+            updated_at = NOW()
+    """
+
+    cur.executemany(upsert_query, insert_values)
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    print("[CACHE SYNC] Cache updated:", len(insert_values))
+
+    return remote_orders
+
+
+@app.route("/last_orders")
+def last_orders():
+    phone = normalize_phone(request.args.get("phone"))
+
+    print("========== LAST_ORDERS HIT ==========")
+    print("Phone received:", phone)
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT
+            order_code,
+            customer_name,
+            customer_city,
+            order_date
+        FROM cached_order_info
+        WHERE REPLACE(REPLACE(REPLACE(customer_phone,' ',''),'-',''),'+','') LIKE %s
+          AND order_date > NOW() - INTERVAL '14 days'
+        ORDER BY order_date DESC
+    """, (f"%{phone[-10:]}",))
+
+    rows = cur.fetchall()
+
+    print("CACHE RESULT COUNT:", len(rows))
+
+    cur.close()
+    conn.close()
+
+    if not rows:
+        print("CACHE MISS → SYNCING FROM LIFAFAY")
+        rows = sync_orders_by_phone(phone)
+    else:
+        print("CACHE HIT")
+
+    return jsonify({
+        "orders": rows,
+        "count": len(rows)
+    })

@@ -40,7 +40,14 @@
     scrollbar-width: thin;  /* Thin scrollbar */
     scrollbar-color: #37404a transparent;
 }
+.modal div::-webkit-scrollbar {
+  width: 6px;
+}
 
+.modal div::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 10px;
+}
     /* Individual Filter Chip */
     .filter-chip {
         padding: 6px 12px;
@@ -689,12 +696,33 @@
 </div>
 <!-- 🟢 NEW: VARIABLE INPUT MODAL -->
 <div class="modal-overlay" id="variable-modal">
-    <div class="modal" style="width: 400px;">
+  <div class="modal" style="width:400px; max-height:85vh; display:flex; flex-direction:column;">
         <h3>Fill Template Details</h3>
-        <p id="var-template-preview" style="font-size:12px; color:#8696a0; margin-bottom:15px; font-style:italic;"></p>
+        <h3>Fill Template Details</h3>
 
-        <!-- Inputs will be generated here -->
-        <div id="variable-inputs-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+        <div style="overflow-y:auto; padding-right:5px; flex:1;">
+
+            <p id="var-template-preview"
+               style="font-size:12px; color:#8696a0; margin-bottom:15px; font-style:italic;">
+            </p>
+
+            <!-- Order Selector -->
+            <div id="order-selector" style="display:none; margin-bottom:12px;">
+                <label style="font-size:12px; font-weight:bold; color:#00a884;">
+                    Select Order
+                </label>
+                <select id="order-select"
+                    style="width:100%; padding:6px; border-radius:6px; border:1px solid #ddd;">
+                </select>
+            </div>
+
+            <!-- Inputs -->
+            <div id="variable-inputs-container"
+                 style="display:flex; flex-direction:column; gap:10px;">
+            </div>
+
+        </div>
+
 
         <div class="modal-buttons" style="margin-top:20px;">
             <button class="btn btn-sec" onclick="closeModal('variable-modal')">Cancel</button>
@@ -715,7 +743,9 @@
 
     let lastTagStateSignature = "";
     let currentChatContext = {
-        name: null
+        name: null,
+        order_code: null,
+        order_candidates: []
     };
 
     // TIMERS
@@ -821,20 +851,67 @@
         }
     }
 
+    let orderContextLoading = false;
+
+
     async function openChat(phone, name) {
+
+        // ================= RESET CONTEXT =================
         currentChatContext.name = name || null;
+        currentChatContext.order_code = null;
+        currentChatContext.order_candidates = [];
+        // =================================================
 
         if (currentPhone === phone) return;
+
+        // ================= LOAD ORDER DATA =================
+        orderContextLoading = true;
+
+        fetch(`/last_orders?phone=${phone}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+
+                console.log("LAST_ORDERS RESPONSE:", d);
+
+                if (!d || !d.orders || d.count === 0) return;
+
+                // ✅ Always auto-pick latest order
+                currentChatContext.order_code = d.orders[0].order_code;
+
+                // ✅ Name fallback from Lifafay
+                if (
+                    (!currentChatContext.name || currentChatContext.name.trim() === "") &&
+                    d.orders[0].customer_name
+                ) {
+                    currentChatContext.name = d.orders[0].customer_name;
+                }
+
+                // ✅ Show dropdown if multiple orders
+                if (d.count > 1) {
+                    populateOrderDropdown(d.orders);
+                } else {
+                    document.getElementById("order-selector").style.display = "none";
+                }
+
+                console.log("FINAL CHAT CONTEXT:", currentChatContext);
+            })
+            .catch(err => console.error("Order fetch failed:", err))
+            .finally(() => {
+                orderContextLoading = false;
+            });
+
+        // ====================================================
 
         // 1. Kill old processes
         if (chatLoopTimer) { clearTimeout(chatLoopTimer); chatLoopTimer = null; }
         if (chatHistoryTimer) { clearInterval(chatHistoryTimer); chatHistoryTimer = null; }
         if (chatAbortController) { chatAbortController.abort(); }
+
         document.getElementById('header-tag-btn').style.display = 'block';
 
         // 2. Reset State
         const newUrl = `${window.location.pathname}?phone=${phone}`;
-        window.history.pushState({path: newUrl}, '', newUrl);
+        window.history.pushState({ path: newUrl }, '', newUrl);
 
         currentPhone = phone;
         lastRenderChecksum = "";
@@ -842,30 +919,84 @@
 
         // 3. UI Updates
         document.querySelectorAll('.chat-item').forEach(e => e.classList.remove('active'));
+
         const activeItem = document.getElementById(`chat-item-${phone}`);
         if (activeItem) {
             activeItem.classList.add('active');
             const b = activeItem.querySelector('.unread-badge');
-            if(b) b.remove();
+            if (b) b.remove();
         }
 
         document.getElementById('active-contact').innerText = name || phone;
         document.getElementById('active-name').innerText = name ? phone : '';
+
         const h = document.getElementById('header-avatar');
         h.style.backgroundColor = getAvatarColor(phone);
         h.innerText = name ? getInitials(name) : '?';
 
         msgInputEl.disabled = false;
         msgInputEl.focus();
-        document.getElementById('messages').innerHTML = '<div style="text-align:center;padding:50px;color:#8696a0;">Loading messages...</div>';
+
+        document.getElementById('messages').innerHTML =
+            '<div style="text-align:center;padding:50px;color:#8696a0;">Loading messages...</div>';
 
         // 4. Mark Read
         locallyMarkedUnread.delete(phone);
-        fetch('/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({phone})}).catch(()=>{});
+        fetch('/mark_read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone })
+        }).catch(() => {});
 
-        // 5. Start
+        // 5. Start chat polling
         await refreshChat(true);
         chatLoop();
+    }
+    function populateOrderDropdown(orders) {
+
+        const box = document.getElementById("order-selector");
+        const select = document.getElementById("order-select");
+
+        if (!box || !select) return;
+
+        select.innerHTML = "";
+
+        orders.forEach((o, idx) => {
+
+            const d = new Date(o.order_date);
+            const label = `${o.order_code} — ${d.toLocaleDateString()}`;
+
+            const opt = document.createElement("option");
+            opt.value = o.order_code;
+            opt.textContent = label;
+
+            if (idx === 0) opt.selected = true;
+
+            select.appendChild(opt);
+        });
+
+        // Show selector
+        box.style.display = "block";
+
+        // --- IMPORTANT FIX ---
+        select.onchange = () => {
+
+            const selectedCode = select.value;
+
+            // Update context
+            currentChatContext.order_code = selectedCode;
+
+            // Update Variable {{2}} input field if exists
+            const var2Input = document.querySelector(
+                '#variable-inputs-container input[data-index="2"]'
+            );
+
+            if (var2Input) {
+                var2Input.value = selectedCode;
+            }
+
+            console.log("Order changed:", selectedCode);
+        };
     }
 
     async function refreshChat(forceScroll = false) {
@@ -1276,6 +1407,10 @@
     }
 
     function checkTemplateVariables(name, lang, bodyText) {
+      if (orderContextLoading) {
+      alert("Loading order details... please wait");
+      return;
+      }
         const regex = /\{\{(\d+)\}\}/g;
         const matches = [...bodyText.matchAll(regex)];
 
@@ -1307,6 +1442,9 @@
             // 🟢 AUTO-FILL NAME FOR {{1}}
             if (varNum === '1' && currentChatContext.name) {
                 prefill = currentChatContext.name;
+            }
+            if (varNum === '2' && currentChatContext.order_code) {
+                prefill = currentChatContext.order_code;
             }
 
             wrapper.innerHTML =
