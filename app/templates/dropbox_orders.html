@@ -512,7 +512,16 @@
                 })
             });
 
-            const data = await res.json();
+            const raw = await res.text();
+            console.log("MANUAL SEND RAW:", raw);
+
+            let data;
+            try {
+                data = JSON.parse(raw);
+            } catch (e) {
+                alert("Backend Error:\n" + raw.substring(0,300));
+                return;
+            }
 
             if (res.ok) {
                 let msg = `✅ Success! Sent ${data.sent_count} / ${data.total_found} images.`;

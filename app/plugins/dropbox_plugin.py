@@ -11,7 +11,7 @@ import tempfile
 import mimetypes
 from werkzeug.utils import secure_filename
 import psycopg2
-from psycopg2.extras import DictCursor
+from psycopg2.extras import RealDictCursor, DictCursor
 
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
