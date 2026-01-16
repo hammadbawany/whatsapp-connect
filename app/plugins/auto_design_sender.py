@@ -582,7 +582,7 @@ def run_auto_design_delivery():
 @design_sender_bp.route("/manual_send_design", methods=['POST'])
 def manual_send_design():
     """MANUAL SINGLE BUTTON"""
-    from app import PENDING_DESIGN_CONFIRMATION # Import here
+    from app.constants import PENDING_DESIGN_CONFIRMATION
 
     if "user_id" not in session: return jsonify({"error": "Unauthorized"}), 401
 
@@ -630,7 +630,7 @@ def manual_send_design():
                     "ts": time.time(),
                     "source": "auto_design_prompt"
                 }
-                add_contact_tag(active_phone, 1)
+                add_contact_tag(phone, 1)
 
             except Exception as e:
                 print("❌ Failed to set confirmation or send text:", e)
