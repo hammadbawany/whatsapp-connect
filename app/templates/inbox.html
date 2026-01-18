@@ -1290,9 +1290,22 @@
 
           // 🔹 UNTAGGED FILTER (this is 'none' in your app)
           if (currentFilter === 'none') {
-              // 1️⃣ Untagged + unread
-              // 2️⃣ OR any special tagged chat (read or unread)
-              return (isUntagged && unread) || isSpecialTag;
+
+              const tagNames = (c.tags || []).map(t => t.name);
+              const hasUnread = (c.unread_count || 0) > 0;
+
+              const isUntagged = tagNames.length === 0;
+
+              const isFollowUp = tagNames.includes("Follow Up");
+              const isUpdateBill = tagNames.includes("Update Bill");
+              const isReturns = tagNames.includes("Returns");
+
+              return (
+                  (isUntagged && hasUnread) ||
+                  isFollowUp ||
+                  isUpdateBill ||
+                  (isReturns && hasUnread)
+              );
           }
 
           // 🔹 NORMAL TAG FILTER
@@ -1868,26 +1881,25 @@ function renderTagFilters() {
     // Count chats
     allChats.forEach(c => {
 
-        // Determine unread (same logic as chat list)
-        const isLocallyUnread = locallyMarkedUnread.has(c.phone);
-        const unreadVal = isLocallyUnread
-            ? Math.max(1, c.unread_count || 0)
-            : (c.unread_count || 0);
+        // Use SERVER unread only (ignore local override)
+        const hasUnread = (c.unread_count || 0) > 0;
 
         const tagNames = (c.tags || []).map(t => t.name);
 
         const isUntagged = tagNames.length === 0;
 
-        const isSpecialTag =
-            tagNames.includes("Follow Up") ||
-            tagNames.includes("Update Bill") ||
-            tagNames.includes("Returns");
+        const isFollowUp = tagNames.includes("Follow Up");
+        const isUpdateBill = tagNames.includes("Update Bill");
+        const isReturns = tagNames.includes("Returns");
 
-        // ✅ UNTAPPED FILTER BADGE LOGIC
-        // 1) Untagged + unread
-        // 2) OR special tags (read or unread)
+        // 🔥 FINAL BUSINESS RULE
+        const includeInUntaggedBadge =
+            (isUntagged && hasUnread) ||
+            isFollowUp ||
+            isUpdateBill ||
+            (isReturns && hasUnread);
 
-        if ((isUntagged && unreadVal > 0) || isSpecialTag) {
+        if (includeInUntaggedBadge) {
             untaggedCount++;
         }
 
@@ -1900,6 +1912,7 @@ function renderTagFilters() {
             }
         });
     });
+
 
     // 🟢 Signature optimization (prevent unnecessary re-render)
     const currentSignature =
