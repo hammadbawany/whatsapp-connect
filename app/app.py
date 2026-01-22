@@ -560,6 +560,7 @@ def history():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
+    # 👇 UPDATED QUERY: Added 'm.intent'
     cur.execute("""
         SELECT
             m.id,
@@ -571,9 +572,9 @@ def history():
             m.timestamp,
             m.whatsapp_id,
             m.context_whatsapp_id,
-             m.deleted_for_me,              -- 🔥 REQUIRED
-             m.deleted_for_everyone,        -- 🔥 REQUIRED
-
+            m.deleted_for_me,
+            m.deleted_for_everyone,
+            m.intent,              -- 🔥 ADDED THIS
 
             -- reply message fields
             r.sender        AS reply_sender,
@@ -604,7 +605,7 @@ def history():
             ts += "Z"
 
         item = {
-            "id": r["id"],                              # 🔥 REQUIRED
+            "id": r["id"],
             "sender": r["sender"],
             "message": r["message"],
             "media_type": r["media_type"],
@@ -612,8 +613,9 @@ def history():
             "status": r["status"],
             "timestamp": ts,
             "whatsapp_id": r["whatsapp_id"],
-            "deleted_for_me": r["deleted_for_me"],      # 🔥 REQUIRED
-            "deleted_for_everyone": r["deleted_for_everyone"]
+            "deleted_for_me": r["deleted_for_me"],
+            "deleted_for_everyone": r["deleted_for_everyone"],
+            "intent": r["intent"]  # 🔥 ADDED THIS
         }
 
         if r["reply_whatsapp_id"]:

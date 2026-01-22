@@ -1000,151 +1000,154 @@
     }
 
     async function refreshChat(forceScroll = false) {
-        const phoneAtStart = currentPhone;
-        if (!phoneAtStart || isSending) return;
+            const phoneAtStart = currentPhone;
+            if (!phoneAtStart || isSending) return;
 
-        if (chatAbortController) chatAbortController.abort();
-        chatAbortController = new AbortController();
+            if (chatAbortController) chatAbortController.abort();
+            chatAbortController = new AbortController();
 
-        let msgs;
-        try {
-            const resp = await fetch(`/history?phone=${phoneAtStart}`, { signal: chatAbortController.signal });
-            if (!resp.ok) return;
-            const ct = resp.headers.get('content-type') || '';
-            if (!ct.includes('application/json')) return;
-            msgs = await resp.json();
-        } catch (e) { return; }
+            let msgs;
+            try {
+                const resp = await fetch(`/history?phone=${phoneAtStart}`, { signal: chatAbortController.signal });
+                if (!resp.ok) return;
+                const ct = resp.headers.get('content-type') || '';
+                if (!ct.includes('application/json')) return;
+                msgs = await resp.json();
+            } catch (e) { return; }
 
-        if (phoneAtStart !== currentPhone) return;
-        if (!Array.isArray(msgs)) return;
+            if (phoneAtStart !== currentPhone) return;
+            if (!Array.isArray(msgs)) return;
 
-        msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            msgs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        // OPTIMIZATION
-        const count = msgs.length;
-        const lastMsg = count > 0 ? msgs[count - 1] : null;
-        const currentChecksum = `${count}-${lastMsg ? lastMsg.id : '0'}-${lastMsg ? lastMsg.status : 'n'}`;
+            // OPTIMIZATION
+            const count = msgs.length;
+            const lastMsg = count > 0 ? msgs[count - 1] : null;
+            const currentChecksum = `${count}-${lastMsg ? lastMsg.id : '0'}-${lastMsg ? lastMsg.status : 'n'}`;
 
-        if (!forceScroll && currentChecksum === lastRenderChecksum) return;
+            if (!forceScroll && currentChecksum === lastRenderChecksum) return;
 
-        lastRenderChecksum = currentChecksum;
-        lastRenderedMessages = msgs;
-        lastRenderedCount = count;
+            lastRenderChecksum = currentChecksum;
+            lastRenderedMessages = msgs;
+            lastRenderedCount = count;
 
-        const container = document.getElementById('messages');
-        const isAtBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 150;
-        const frag = document.createDocumentFragment();
+            const container = document.getElementById('messages');
+            const isAtBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 150;
+            const frag = document.createDocumentFragment();
 
-        const banner = document.createElement('div');
-        banner.style.cssText = 'text-align:center;margin:20px;color:#8696a0;font-size:12px;';
-        banner.innerHTML = '<span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.';
-        frag.appendChild(banner);
+            const banner = document.createElement('div');
+            banner.style.cssText = 'text-align:center;margin:20px;color:#8696a0;font-size:12px;';
+            banner.innerHTML = '<span class="material-icons" style="font-size:12px;">lock</span> Messages are end-to-end encrypted.';
+            frag.appendChild(banner);
 
-        let lastRenderedDate = null;
-        lastUserMsgTime = null;
-        messageById.clear();
+            let lastRenderedDate = null;
+            lastUserMsgTime = null;
+            messageById.clear();
 
-        for (const m of msgs) {
-            // Date Divider
-            const msgDate = new Date(m.timestamp).toDateString();
-            if (msgDate !== lastRenderedDate) {
-                const divider = document.createElement('div');
-                divider.className = 'date-divider';
-                const today = new Date().toDateString();
-                const yesterday = new Date(Date.now() - 86400000).toDateString();
-                if (msgDate === today) divider.innerText = 'Today';
-                else if (msgDate === yesterday) divider.innerText = 'Yesterday';
-                else divider.innerText = new Date(m.timestamp).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
-                frag.appendChild(divider);
-                lastRenderedDate = msgDate;
-            }
-
-            const isSent = m.sender === 'agent';
-            if (!isSent) {
-                const ts = parseServerTimestamp(m.timestamp);
-                if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
-            }
-
-            const div = document.createElement('div');
-            div.className = `msg ${isSent ? 'sent' : 'received'}`;
-            if (m.id) {
-                div.dataset.msgId = m.id;
-                messageById.set(String(m.id), m);
-            }
-            if (m.whatsapp_id) div.dataset.wamid = m.whatsapp_id;
-
-            // Reply UI
-            let replyHtml = '';
-            if (m.reply_to) {
-                let pt = m.reply_to.message ? m.reply_to.message.substring(0, 80) : (m.reply_to.media_type ? `[${m.reply_to.media_type}]` : 'Message');
-                let thumb = '';
-                if (['image','video'].includes(m.reply_to.media_type) && m.reply_to.media_id) {
-                    thumb = `<img src="/media/${m.reply_to.media_id}" class="reply-thumb" loading="lazy" onerror="this.style.display='none'">`;
+            for (const m of msgs) {
+                // Date Divider
+                const msgDate = new Date(m.timestamp).toDateString();
+                if (msgDate !== lastRenderedDate) {
+                    const divider = document.createElement('div');
+                    divider.className = 'date-divider';
+                    const today = new Date().toDateString();
+                    const yesterday = new Date(Date.now() - 86400000).toDateString();
+                    if (msgDate === today) divider.innerText = 'Today';
+                    else if (msgDate === yesterday) divider.innerText = 'Yesterday';
+                    else divider.innerText = new Date(m.timestamp).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+                    frag.appendChild(divider);
+                    lastRenderedDate = msgDate;
                 }
-                replyHtml = `<div class="reply-preview" data-reply-id="${m.reply_to.whatsapp_id||''}"><div class="reply-bar"></div><div class="reply-content"><div class="reply-author">${m.reply_to.sender==='agent'?'You':'User'}</div><div class="reply-row">${thumb}<div class="reply-text">${pt}</div></div></div></div>`;
-            }
 
-            // Content
-            let content = '';
-            if (m.deleted_for_me || m.deleted_for_everyone) {
-                div.classList.add('deleted');
-                content = `<div class="deleted-msg">${m.sender === 'agent' ? 'You deleted this message' : 'This message was deleted'}</div>`;
-            } else if (m.media_id) {
-                if (['audio','voice'].includes(m.media_type)) content = `<audio controls preload="none"><source src="/media/${m.media_id}"></audio>`;
-                else if (m.media_type === 'video') content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
-                else if (m.media_type === 'document') content = `<div style="padding:10px;"><a href="/media/${m.media_id}" target="_blank" style="text-decoration:none;color:white;">📄 Download Document</a></div>`;
-                else content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" onclick="openImageViewer(this.src)">`;
+                const isSent = m.sender === 'agent';
+                if (!isSent) {
+                    const ts = parseServerTimestamp(m.timestamp);
+                    if (!lastUserMsgTime || ts > lastUserMsgTime) lastUserMsgTime = ts;
+                }
 
-                if (m.message && !['audio','voice'].includes(m.media_type)) content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
-            } else {
-                content = linkify(m.message || '');
-            }
+                const div = document.createElement('div');
+                div.className = `msg ${isSent ? 'sent' : 'received'}`;
 
-            const time = new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const tickHtml = isSent ? getTickHtml(m.status) : '';
-            const arrowHtml = !(m.deleted_for_me || m.deleted_for_everyone) ? '<span class="msg-actions" onclick="openContextMenu(event,this)">▾</span>' : '';
+                // 🔥 ADDED: Set title attribute for hover effect
+                if (m.intent && m.intent !== 'unknown') {
+                    div.title = `Intent: ${m.intent}`;
+                }
 
-            div.innerHTML = `${arrowHtml}${replyHtml}${content}<div class="msg-meta">${time} ${tickHtml}</div>`;
-            frag.appendChild(div);
-        }
+                if (m.id) {
+                    div.dataset.msgId = m.id;
+                    messageById.set(String(m.id), m);
+                }
+                if (m.whatsapp_id) div.dataset.wamid = m.whatsapp_id;
 
-        container.replaceChildren(frag);
+                // Reply UI
+                let replyHtml = '';
+                if (m.reply_to) {
+                    let pt = m.reply_to.message ? m.reply_to.message.substring(0, 80) : (m.reply_to.media_type ? `[${m.reply_to.media_type}]` : 'Message');
+                    let thumb = '';
+                    if (['image','video'].includes(m.reply_to.media_type) && m.reply_to.media_id) {
+                        thumb = `<img src="/media/${m.reply_to.media_id}" class="reply-thumb" loading="lazy" onerror="this.style.display='none'">`;
+                    }
+                    replyHtml = `<div class="reply-preview" data-reply-id="${m.reply_to.whatsapp_id||''}"><div class="reply-bar"></div><div class="reply-content"><div class="reply-author">${m.reply_to.sender==='agent'?'You':'User'}</div><div class="reply-row">${thumb}<div class="reply-text">${pt}</div></div></div></div>`;
+                }
 
-        if ((forceScroll || isAtBottom) && !isNavigatingToReply) {
-            container.scrollTop = container.scrollHeight;
-        }
-        updateSessionTimer();
+                // Content
+                let content = '';
+                if (m.deleted_for_me || m.deleted_for_everyone) {
+                    div.classList.add('deleted');
+                    content = `<div class="deleted-msg">${m.sender === 'agent' ? 'You deleted this message' : 'This message was deleted'}</div>`;
+                } else if (m.media_id) {
+                    if (['audio','voice'].includes(m.media_type)) content = `<audio controls preload="none"><source src="/media/${m.media_id}"></audio>`;
+                    else if (m.media_type === 'video') content = `<video class="chat-media" controls src="/media/${m.media_id}"></video>`;
+                    else if (m.media_type === 'document') content = `<div style="padding:10px;"><a href="/media/${m.media_id}" target="_blank" style="text-decoration:none;color:white;">📄 Download Document</a></div>`;
+                    else content = `<img src="/media/${m.media_id}" class="chat-media" loading="lazy" onclick="openImageViewer(this.src)">`;
 
-
-        // 🟢 AUTOMATION PREVIEW (AFTER MESSAGES RENDER)
-
-        if (
-            lastMsg &&
-            lastMsg.sender === "customer" &&
-            lastMsg.message
-        ) {
-            fetch("/automation/preview", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    message: lastMsg.message
-                })
-            })
-            .then(r => r.json())
-            .then(preview => {
-                if (preview && preview.intent) {
-                    showAutomationBanner(preview);
+                    if (m.message && !['audio','voice'].includes(m.media_type)) content += `<div style="margin-top:5px;">${linkify(m.message)}</div>`;
                 } else {
-                    hideAutomationBanner();
+                    content = linkify(m.message || '');
                 }
-            })
-            .catch(() => hideAutomationBanner());
-        } else {
-            hideAutomationBanner();
+
+                const time = new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const tickHtml = isSent ? getTickHtml(m.status) : '';
+                const arrowHtml = !(m.deleted_for_me || m.deleted_for_everyone) ? '<span class="msg-actions" onclick="openContextMenu(event,this)">▾</span>' : '';
+
+                div.innerHTML = `${arrowHtml}${replyHtml}${content}<div class="msg-meta">${time} ${tickHtml}</div>`;
+                frag.appendChild(div);
+            }
+
+            container.replaceChildren(frag);
+
+            if ((forceScroll || isAtBottom) && !isNavigatingToReply) {
+                container.scrollTop = container.scrollHeight;
+            }
+            updateSessionTimer();
+
+            // 🟢 AUTOMATION PREVIEW (AFTER MESSAGES RENDER)
+            if (
+                lastMsg &&
+                lastMsg.sender === "customer" &&
+                lastMsg.message
+            ) {
+                fetch("/automation/preview", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: lastMsg.message
+                    })
+                })
+                .then(r => r.json())
+                .then(preview => {
+                    if (preview && preview.intent) {
+                        showAutomationBanner(preview);
+                    } else {
+                        hideAutomationBanner();
+                    }
+                })
+                .catch(() => hideAutomationBanner());
+            } else {
+                hideAutomationBanner();
+            }
+
         }
-
-    }
-
     // ==========================================
     // 3. ACTION HANDLERS
     // ==========================================
