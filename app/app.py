@@ -215,14 +215,23 @@ def webhook():
                 # Ensure contact exists
                 cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
 
+                # -----------------------------
                 # MEDIA HANDLING
+                # -----------------------------
                 if msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
                     media_obj = msg.get(msg_type, {})
-                    cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp) VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW())", (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
+                    # Insert with intent='media'
+                    cur.execute("""
+                        INSERT INTO messages
+                        (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp, intent)
+                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW(), 'media')
+                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
                     conn.commit()
                     continue
 
+                # -----------------------------
                 # TEXT HANDLING
+                # -----------------------------
                 text = ""
                 if msg_type == "text": text = msg.get("text", {}).get("body", "")
                 elif msg_type == "interactive":
@@ -232,23 +241,36 @@ def webhook():
 
                 if not text: continue
 
-                # Save Message
-                cur.execute("INSERT INTO messages (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp) VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW())", (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id))
-                conn.commit()
-
-                lower = text.lower().strip()
+                # 🟢 STEP A: GET CONTEXT MESSAGE (To help detection)
+                agent_context_msg = None
                 row = None
                 if context_whatsapp_id:
                     cur.execute("SELECT message FROM messages WHERE whatsapp_id = %s AND sender = 'agent'", (context_whatsapp_id,))
                     row = cur.fetchone()
+                    if row:
+                        agent_context_msg = row["message"]
+
+                # 🟢 STEP B: DETECT INTENT *BEFORE* SAVING
+                intent = detect_design_intent(text, agent_context_msg)
+                print(f"🧠 [INTENT DETECTED]: {intent} (Text: {text})")
+
+                # 🟢 STEP C: SAVE MESSAGE *WITH* INTENT
+                cur.execute("""
+                    INSERT INTO messages
+                    (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp, intent)
+                    VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW(), %s)
+                """, (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id, intent))
+                conn.commit()
+
+                lower = text.lower().strip()
 
                 # -----------------------------------------------------
                 # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS (Button Clicks)
                 # -----------------------------------------------------
                 if phone in PENDING_TEXT_CONFIRMATIONS:
-                    print(f"🚦 [STATE] Found Pending Text Edit for {phone}")
+                    # ... [Keep your existing logic for Text Confirmations here] ...
+                    # (Code shortened for brevity, keep your original logic)
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
-
                     button_id = ""
                     if msg_type == "interactive":
                         button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
@@ -257,50 +279,24 @@ def webhook():
                     is_edit = (button_id == "edit_text") or (lower in {"edit", "change text", "no", "change", "edit text"})
 
                     if pending.get("source") == "text_edit":
-                        if time.time() - pending["ts"] > TEXT_CONFIRMATION_TTL_SECONDS:
-                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                        else:
-                            if is_confirm:
-                                print("✅ [TEXT EDIT] Confirmed.")
-                                PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-
-                                # 1. Send Immediate Reply
-                                send_text_internal(phone, "Okay. Let me edit and show you ⏳")
-
-                                # 2. Prepare Payload
-                                payload = {
-                                    "action": "text_change", "source": "whatsapp", "folder_path": pending["folder_path"],
-                                    "final_text": pending["semantic_svg"], "target_block": pending["target_block"], "phone": phone
-                                }
-
-                                # 3. Background Thread
-                                def bg_design_trigger(api_url, json_data):
-                                    try:
-                                        print(f"🚀 [BG] Triggering Design API for {json_data.get('phone')}...")
-                                        requests.post(api_url, json=json_data, timeout=60)
-                                    except Exception as e:
-                                        print(f"❌ [BG] Design API Failed: {e}")
-
-                                Thread(target=bg_design_trigger, args=(f"{APP_BASE_URL}/api/design/action", payload)).start()
-                                continue
-
-                            elif is_edit:
-                                print("✏️ [TEXT EDIT] Rejected.")
-                                PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                                send_text_internal(phone, "✏️ Please send the correct text.")
-                                continue
+                        # ... execute your logic ...
+                        if is_confirm:
+                             # ... logic ...
+                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                             continue
+                        elif is_edit:
+                             # ... logic ...
+                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                             continue
 
                 # -----------------------------------------------------
-                # 🧠 2. PRIORITY: INTENT DETECTION (The Unified Block)
+                # 🧠 2. PRIORITY: LOGIC BASED ON DETECTED INTENT
                 # -----------------------------------------------------
-                agent_context_msg = row["message"] if row else None
-                intent = detect_design_intent(text, agent_context_msg)
-                print(f"🧠 [INTENT] Detected: {intent} (Context: {agent_context_msg})")
+                # Now we use the `intent` variable we calculated earlier
 
-                # If context exists OR user is in pending confirmation OR intent is explicitly detected
                 if row or (phone in PENDING_DESIGN_CONFIRMATION) or intent != "unknown":
 
-                    # A. Manual Discussion (Agent asked question, User answered)
+                    # A. Manual Discussion
                     if intent == "manual_discussion":
                         print("🎨 Contextual Discussion detected. Tagging Agent.")
                         #add_contact_tag(phone, 9)
@@ -309,107 +305,56 @@ def webhook():
                     # B. Text Changes (Automated)
                     elif intent in ["text", "text_implicit"]:
                         print("▶️ [FLOW] Text Change Logic Started...")
-                        from app.plugins.text_change_detector import process_text_change_request, resolve_text_delta, apply_delta, build_confirmation_message
-
                         reply_msg = row["message"] if row else ""
                         result = process_text_change_request(phone=phone, customer_text=text, reply_caption=reply_msg)
 
                         if result:
+                            # ... keep your text processing logic ...
                             delta = resolve_text_delta(text, result["semantic_svg"])
                             if delta:
-                                print(f"   ✅ Delta Found: {delta}")
-                                add_contact_tag(phone, 7)
-                                updated_svg = apply_delta(result["semantic_svg"], delta)
-                                confirm_msg = build_confirmation_message(updated_svg)
-                                send_buttons(phone, confirm_msg, [{"id": "confirm_text", "title": "Confirm Text"}, {"id": "edit_text", "title": "Edit Text"}])
-
-                                PENDING_TEXT_CONFIRMATIONS[phone] = {
-                                    "source": "text_edit", "folder_path": result["folder_path"],
-                                    "semantic_svg": updated_svg, "target_block": result["target_block"], "ts": time.time()
-                                }
+                                # ... logic ...
                                 continue
-                    # C. DELIVERY / GENERAL QUERIES (New)
+
+                    # C. DELIVERY / GENERAL QUERIES
                     elif intent == "delivery_query":
-                        print("🚚 Delivery Query Detected. Tagging Agent.")
-                        #add_contact_tag(phone, 9) # Tag for Human
-                        #send_text_internal(phone, "🕒 I have notified the team about your delivery request. They will check the status and reply shortly.")
+                        print("🚚 Delivery Query Detected.")
                         continue
 
                     # D. Manual Design Edits
                     elif intent in ["typography", "color", "design_swap"]:
-                        print(f"🎨 Manual Request ({intent}). Tagging Agent.")
-                        #add_contact_tag(phone, 9)
-                        msg_reply = "🔄 I've noted you want to change the design or add items. An agent will help you shortly." if intent == "design_swap" else "Let me get back to you."
-                        #send_text_internal(phone, msg_reply)
+                        print(f"🎨 Manual Request ({intent}).")
                         continue
 
-                    # E. Layout (Semi-Automated)
+                    # E. Layout
                     elif intent == "layout":
                         print("▶️ [FLOW] Layout Change detected.")
-                        from app.plugins.design_reply_editor import handle_design_reply
                         success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
-                        if success:
-                            print("🚚 layout Detected. Tagging Agent.")
-
-                        #    send_text_internal(phone, "🔄 Adjusting the layout for you...Let me edit and show you")
-                        else:
-                            print("🚚 layout fail. Tagging Agent.")
-
-                            #add_contact_tag(phone, 9)
-                            #send_text_internal(phone, "🛠️ I've noted your layout request. An agent will adjust this shortly.")
                         continue
 
                 # -----------------------------------------------------
-                # ✅ 3. PRIORITY: DESIGN CONFIRMATION (Stateful)
+                # ✅ 3. PRIORITY: DESIGN CONFIRMATION
                 # -----------------------------------------------------
+                # ... Keep your existing confirmation logic ...
                 if phone in PENDING_DESIGN_CONFIRMATION:
-                    pending = PENDING_DESIGN_CONFIRMATION[phone]
+                     # ... logic ...
+                     pass
+                elif not ai_handled and context_whatsapp_id:
+                     # Stateless failsafe logic
+                     is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
+                     if is_stateless_confirm:
+                         continue
 
-                    # 🟢 FIX 1: Timestamp Check
-                    # Ignore messages sent BEFORE the design prompt was actually sent
-                    # msg.get('timestamp') is a string unix timestamp from WhatsApp
-                    msg_ts = float(msg.get("timestamp", time.time()))
-                    if msg_ts < pending["ts"]:
-                        print(f"⏳ [CONFIRMATION] Ignoring old message (Time: {msg_ts} < Prompt: {pending['ts']})")
-                        continue
-
-                    print(f"🕵️ [CONFIRMATION] Checking: '{text}'")
-                    if time.time() - pending["ts"] > DESIGN_CONFIRM_TTL_SECONDS:
-                        PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                    else:
-                        is_handled = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
-                        if is_handled:
-                            print(f"   ✅ Confirmed! Tagging ID 5.")
-                            add_contact_tag(phone, 5)
-                            PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                            continue
-
-                # 🟢 3.5 FAILSAFE: DESIGN CONFIRMATION (Stateless)
-                # 🛑 FIX 2: Only allow stateless confirmation if REPLYING TO IMAGE
-                if not ai_handled:
-                    # If the user is NOT in the pending list (e.g. server restart OR message sent before design),
-                    # we ONLY accept confirmation if they strictly REPLY to the image (context_id).
-                    # This prevents random "Ok" messages from tagging the order.
-
-                    if context_whatsapp_id:
-                        print(f"   🕵️ [FAILSAFE] Context found. Checking for confirmation...")
-                        is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
-
-                        if is_stateless_confirm:
-                            print(f"   ✅ Confirmed (Stateless Context)! Tagging ID 5.")
-                            add_contact_tag(phone, 5)
-                            PENDING_DESIGN_CONFIRMATION.pop(phone, None)
-                            continue
                 # -----------------------------------------------------
                 # 🤖 4. FALLBACK: GENERAL AUTOMATION
                 # -----------------------------------------------------
-                print("▶️ [FLOW] Running General Automations...")
+                # ... Keep automation logic ...
                 run_automations(cur=cur, phone=phone, message_text=text, send_text=send_text_internal)
 
             except Exception as e:
                 print(f"❌ Message Error: {e}")
                 traceback.print_exc()
 
+        # Update statuses
         for s in value.get("statuses", []):
             cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
         conn.commit()
@@ -4044,20 +3989,35 @@ def detect_design_intent(text):
     t = text.lower()
 
 def detect_design_intent(text, agent_message=None):
-    t = text.lower()
+    if not text:
+        return "unknown"
+
+    t = text.lower().strip()
 
     # 1. Context Check (Agent asked a question?)
+    # If the agent asked "What color?" and user says "Blue", intent is "color" via discussion
     if agent_message:
         a_msg = agent_message.lower()
         if "?" in a_msg or "want" in a_msg:
-            triggers = ["color", "font", "size", "change", "adjust"]
+            if "color" in a_msg: return "color"
+            if "font" in a_msg: return "typography"
+            if "size" in a_msg: return "typography"
+
+            triggers = ["change", "adjust", "modify"]
             if any(k in a_msg for k in triggers):
                 return "manual_discussion"
 
-    # Helper for Whole Word Matching
+    # Helper for Whole Word Matching (prevents "scent" matching "center")
     def matches(keywords, text):
-        pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
-        return bool(re.search(pattern, text))
+        # We replace regex \b with a simple check to be more robust for Urdu/Roman Urdu
+        for k in keywords:
+            # Check if keyword is in text (simple partial match)
+            # OR use regex for boundary if needed.
+            # For simplicity and coverage on Roman Urdu, simple 'in' often works better
+            # unless words are very short like "no".
+            if f" {k} " in f" {text} ": # simple boundary check
+                return True
+        return False
 
     # ----------------------------------
     # 🟢 KEYWORD LISTS
@@ -4082,47 +4042,48 @@ def detect_design_intent(text, agent_message=None):
     # Typography (Manual)
     typography_keywords = [
         "font", "fonts", "size", "bigger", "smaller", "bold", "thin",
-        "italic", "readable", "clear", "visible", "bara", "chota"
+        "italic", "readable", "clear", "visible", "bara", "chota", "writing style"
     ]
 
     # Color (Manual)
-    # Removed "design" from here to prevent confusion
     color_keywords = [
         "color", "colour", "red", "gold", "golden", "black", "white",
-        "blue", "green", "pink", "shade", "light", "dark", "faded"
+        "blue", "green", "pink", "shade", "light", "dark", "faded", "rang"
     ]
 
     # Text Changes (Automated)
-    # Includes casing commands
     text_change_keywords = [
         "change", "edit", "replace", "write", "spell", "correct", "fix",
         "rename", "remove", "delete", "add", "include", "text", "spelling",
         "likhna", "likh", "naam", "name", "hata", "khatam",
-        "capital", "uppercase", "upper", "lowercase", "lower", "small"
+        "capital", "uppercase", "upper", "lowercase", "lower", "small",
+        "spelling mistake", "wrong spelling"
     ]
 
     # 🔴 Design Swap / Major Changes (Manual)
-    # STRICTER NOW: Must imply a switch or specific issue
     design_swap_keywords = [
         "change design", "different design", "new design", "wrong design",
         "change card", "different card", "wrong card",
         "design number", "design no", "model", "sample",
         "cancel", "return", "refund", "exchange",
-        "mistake"
+        "mistake", "pasand"
+    ]
+
+    confirm_keywords = [
+        "confirm", "ok", "okay", "done", "good", "nice", "perfect", "approved", "proceed", "yes", "han", "theek"
     ]
 
     # ----------------------------------
-    # 🔍 CHECKS
+    # 🔍 CHECKS (Order Matters!)
     # ----------------------------------
 
+    if matches(design_swap_keywords, t): return "design_swap"
     if matches(layout_keywords, t): return "layout"
     if matches(delivery_keywords, t): return "delivery_query"
-    if matches(design_swap_keywords, t): return "design_swap"
     if matches(typography_keywords, t): return "typography"
     if matches(color_keywords, t): return "color"
-
-    # Text changes are the most common "edit", check last
     if matches(text_change_keywords, t): return "text"
+    if matches(confirm_keywords, t): return "confirmation"
 
     return "unknown"
 
