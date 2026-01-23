@@ -4391,3 +4391,172 @@ def last_orders():
         "orders": rows,
         "count": len(rows)
     })
+
+@app.route("/api/undelivered_media")
+@login_required
+def undelivered_media():
+
+    account_id = get_active_account_id()
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT
+            user_phone,
+            media_type,
+            message,
+            whatsapp_id,
+            timestamp
+        FROM messages
+        WHERE
+            whatsapp_account_id = %s
+            AND sender = 'agent'
+            AND media_type IS NOT NULL
+            AND media_type <> 'audio'
+            AND status IN ('sent','failed')
+            AND user_phone != '923468202114'
+        ORDER BY timestamp DESC
+    """, (account_id,))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    for r in rows:
+        if r["timestamp"]:
+            r["timestamp"] = r["timestamp"].isoformat()
+
+    return jsonify(rows)
+
+
+@app.route("/undelivered_media")
+@login_required
+def undelivered_media_page():
+    return render_template("undelivered_media.html")
+
+@app.route("/api/retry_media", methods=["POST"])
+@login_required
+def retry_media():
+
+    data = request.json
+    wa_id = data.get("whatsapp_id")
+
+    if not wa_id:
+        return jsonify({"error": "Missing whatsapp_id"}), 400
+
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # Get original message
+    cur.execute("""
+        SELECT
+            user_phone,
+            media_type,
+            media_id,
+            message,
+            whatsapp_account_id
+        FROM messages
+        WHERE whatsapp_id = %s
+        LIMIT 1
+    """, (wa_id,))
+
+    msg = cur.fetchone()
+
+    if not msg:
+        cur.close()
+        conn.close()
+        return jsonify({"error": "Message not found"}), 404
+
+    # Get account credentials
+    cur.execute("""
+        SELECT phone_number_id, access_token
+        FROM whatsapp_accounts
+        WHERE id = %s
+    """, (msg["whatsapp_account_id"],))
+
+    acc = cur.fetchone()
+
+    if not acc:
+        return jsonify({"error": "Account not found"}), 400
+
+    send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": msg["user_phone"],
+        "type": msg["media_type"],
+        msg["media_type"]: {
+            "id": msg["media_id"]
+        }
+    }
+
+    # Add caption if exists
+    if msg["message"]:
+        payload[msg["media_type"]]["caption"] = msg["message"]
+
+    headers = {
+        "Authorization": f"Bearer {acc['access_token']}",
+        "Content-Type": "application/json"
+    }
+
+    r = requests.post(send_url, json=payload, headers=headers)
+    resp = r.json()
+
+    new_wa_id = None
+
+    if resp.get("messages"):
+        new_wa_id = resp["messages"][0].get("id")
+
+    # Save new outbound attempt
+    if new_wa_id:
+        cur.execute("""
+            INSERT INTO messages
+            (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+            VALUES (%s,%s,'agent',%s,%s,%s,%s,'sent',NOW())
+        """, (
+            msg["whatsapp_account_id"],
+            msg["user_phone"],
+            msg["media_type"],
+            msg["media_id"],
+            msg["message"],
+            new_wa_id
+        ))
+        cur.execute("""
+            UPDATE messages
+            SET manual_delivered = TRUE,
+                manual_delivered_at = NOW()
+            WHERE whatsapp_id = %s
+        """, (wa_id,))
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({"success": True})
+
+@app.route("/api/mark_delivered", methods=["POST"])
+@login_required
+def mark_delivered():
+
+    data = request.json
+    wa_id = data.get("whatsapp_id")
+
+    if not wa_id:
+        return jsonify({"error": "Missing whatsapp_id"}), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE messages
+        SET status = 'delivered'
+        WHERE whatsapp_id = %s
+    """, (wa_id,))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"success": True})

@@ -302,8 +302,7 @@ def run_scheduled_automation():
     # ====================================================
     # 3️⃣ FETCH CUSTOMER REPLIES (OLD LOGIC)
     # ====================================================
-    responded_set = set()
-    sent_set = set()
+    responded_recent = {}
 
     if all_phones:
         conn = get_conn()
@@ -314,26 +313,28 @@ def run_scheduled_automation():
 
         cur.execute(
             f"""
-            SELECT DISTINCT RIGHT(user_phone, 10)
+            SELECT
+                RIGHT(user_phone, 10),
+                MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
               AND RIGHT(user_phone, 10) IN ({fmt})
+            GROUP BY RIGHT(user_phone, 10)
             """,
             tuple(chk)
         )
 
-        for r in cur.fetchall():
-            val = r[0] if not isinstance(r, dict) else list(r.values())[0]
-            responded_set.add(val)
-
+        for phone10, last_ts in cur.fetchall():
+            if last_ts:
+                responded_recent[phone10] = last_ts
 
         cur.execute("SELECT folder_name FROM design_sent_log")
-        for r in cur.fetchall():
-            val = r[0] if not isinstance(r, dict) else list(r.values())[0]
-            sent_set.add(val)
+        sent_set = {r[0] for r in cur.fetchall()}
 
         cur.close()
         conn.close()
+
+
 
     # ====================================================
     # 4️⃣ PROCESS CANDIDATES (OLD DECISION LOGIC)
@@ -343,18 +344,24 @@ def run_scheduled_automation():
             continue
 
         active_phone = item["phones"][0]
-        has_replied = False
+        has_recent_reply = False
 
         for p in item["phones"]:
-            if p[-10:] in responded_set:
-                active_phone = p
-                has_replied = True
-                break
+            short = p[-10:]
+
+            if short in responded_recent:
+
+                last_time = responded_recent[short]
+
+                if datetime.utcnow() - last_time <= timedelta(hours=24):
+                    active_phone = p
+                    has_recent_reply = True
+                    break
 
         is_wa = "whatsapp" in item["source"].lower()
 
         # 🔑 OLD BEHAVIOR: send only if WhatsApp OR replied
-        if not (is_wa or has_replied):
+        if not (is_wa or has_recent_reply):
             continue
 
         # ====================================================

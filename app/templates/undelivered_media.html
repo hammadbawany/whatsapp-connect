@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Undelivered Media Monitor</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #0c1317;
+    color: white;
+    padding: 20px;
+}
+
+h2 {
+    color: #25D366;
+}
+
+.controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.refresh {
+    background: #25D366;
+    color: black;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.counter {
+    background: #202c33;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: bold;
+}
+
+/* Table */
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #202c33;
+    padding: 12px;
+}
+
+td {
+    padding: 10px;
+    border-bottom: 1px solid #2a3942;
+}
+
+tr:hover {
+    background: #1f2c34;
+    cursor: pointer;
+}
+
+/* Status */
+
+.badge {
+    background: #ff3b3b;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+/* Buttons */
+
+.retry-btn {
+    background: #ffaa00;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.delivered-btn {
+    background: #2b8cff;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    margin-left: 6px;
+}
+
+.retry-btn:disabled,
+.delivered-btn:disabled {
+    opacity: 0.6;
+}
+
+/* Old highlight */
+
+.old {
+    background: #2a1515 !important;
+}
+
+/* Empty */
+
+.empty {
+    text-align: center;
+    padding: 20px;
+    color: #8696a0;
+}
+
+/* Remove animation */
+
+.fade-out {
+    animation: fadeOut 0.4s forwards;
+}
+
+@keyframes fadeOut {
+    to {
+        opacity: 0;
+        height: 0;
+    }
+}
+
+</style>
+</head>
+
+<body>
+
+<h2>📸 Undelivered Media (Single Tick Monitor)</h2>
+
+<div class="controls">
+    <button class="refresh" onclick="loadData()">Refresh</button>
+    <div class="counter" id="counter">0 Pending</div>
+</div>
+
+<table>
+<thead>
+<tr>
+    <th>Phone</th>
+    <th>Media</th>
+    <th>Caption</th>
+    <th>Timestamp</th>
+    <th>Status</th>
+    <th>Actions</th>
+</tr>
+</thead>
+
+<tbody id="rows"></tbody>
+</table>
+
+
+<script>
+
+let cache = new Map();
+
+let statusLabel = row.status === "failed" ? "FAILED" : "SINGLE TICK";
+let statusColor = row.status === "failed" ? "#ff0000" : "#ff3b3b";
+// LOAD DATA
+async function loadData(){
+
+    const res = await fetch("/api/undelivered_media");
+    const data = await res.json();
+
+    const tbody = document.getElementById("rows");
+    const counter = document.getElementById("counter");
+
+    counter.innerText = `${data.length} Pending`;
+
+    const newSet = new Set();
+
+    data.forEach(row => {
+
+        newSet.add(row.whatsapp_id);
+
+        if(cache.has(row.whatsapp_id)) return;
+
+        cache.set(row.whatsapp_id, row);
+
+        const tr = document.createElement("tr");
+        tr.id = row.whatsapp_id;
+
+        // Age detector
+        const msgTime = new Date(row.timestamp);
+        const ageMin = (Date.now() - msgTime) / 60000;
+
+        if(ageMin > 10){
+            tr.classList.add("old");
+        }
+
+        // Redirect to inbox
+        tr.onclick = () => {
+          window.open(`/inbox?phone=${row.user_phone}`, "_blank");
+        };
+
+        tr.innerHTML = `
+            <td>${row.user_phone}</td>
+            <td>${row.media_type}</td>
+            <td>${row.message || "-"}</td>
+            <td>${new Date(row.timestamp).toLocaleString('en-GB')}</td>
+            <td><  <span class="badge" style="background:${statusColor}">
+      ${statusLabel}
+  </span>
+</td>
+            <td>
+                <button class="retry-btn"
+                        onclick="retrySend(event,'${row.whatsapp_id}')">
+                    Retry
+                </button>
+
+                <button class="delivered-btn"
+                        onclick="markDelivered(event,'${row.whatsapp_id}')">
+                    Mark Delivered
+                </button>
+            </td>
+        `;
+
+        tbody.appendChild(tr);
+    });
+
+    // AUTO REMOVE delivered
+    cache.forEach((v, key) => {
+
+        if(!newSet.has(key)){
+
+            const row = document.getElementById(key);
+
+            if(row){
+                row.classList.add("fade-out");
+                setTimeout(() => row.remove(), 400);
+            }
+
+            cache.delete(key);
+        }
+
+    });
+
+    if(data.length === 0){
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="empty">
+                    ✅ No undelivered media
+                </td>
+            </tr>
+        `;
+    }
+}
+
+
+// RETRY
+async function retrySend(event, wa_id){
+
+    event.stopPropagation();
+
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerText = "Sending...";
+
+    const res = await fetch("/api/retry_media", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ whatsapp_id: wa_id })
+    });
+
+    const data = await res.json();
+
+    if(data.success){
+        btn.innerText = "Sent ✔";
+        btn.style.background = "#25D366";
+    } else {
+        btn.innerText = "Failed";
+        btn.style.background = "red";
+    }
+}
+
+
+// MANUAL MARK DELIVERED
+async function markDelivered(event, wa_id){
+
+    event.stopPropagation();
+
+    if(!confirm("Mark this message as delivered?")) return;
+
+    const res = await fetch("/api/mark_delivered", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ whatsapp_id: wa_id })
+    });
+
+    const data = await res.json();
+
+    if(data.success){
+
+        const row = document.getElementById(wa_id);
+
+        if(row){
+            row.classList.add("fade-out");
+            setTimeout(() => row.remove(), 400);
+        }
+
+        cache.delete(wa_id);
+    }
+}
+
+
+// AUTO REFRESH
+loadData();
+setInterval(loadData, 20000);
+
+</script>
+
+</body>
+</html>
