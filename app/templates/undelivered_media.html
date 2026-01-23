@@ -61,10 +61,9 @@ tr:hover {
     cursor: pointer;
 }
 
-/* Status */
+/* Status Badge */
 
 .badge {
-    background: #ff3b3b;
     padding: 4px 10px;
     border-radius: 6px;
     font-size: 11px;
@@ -92,12 +91,15 @@ tr:hover {
     margin-left: 6px;
 }
 
-.retry-btn:disabled,
-.delivered-btn:disabled {
-    opacity: 0.6;
+/* Expired Label */
+
+.expired {
+    color: #ff3b3b;
+    font-weight: bold;
+    font-size: 12px;
 }
 
-/* Old highlight */
+/* Old Highlight */
 
 .old {
     background: #2a1515 !important;
@@ -111,7 +113,7 @@ tr:hover {
     color: #8696a0;
 }
 
-/* Remove animation */
+/* Fade Remove */
 
 .fade-out {
     animation: fadeOut 0.4s forwards;
@@ -124,12 +126,33 @@ tr:hover {
     }
 }
 
+/* Right Click Menu */
+
+#contextMenu {
+    position: fixed;
+    background: #202c33;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    display: none;
+    z-index: 9999;
+    min-width: 160px;
+}
+
+.ctx-item {
+    padding: 10px 14px;
+    cursor: pointer;
+}
+
+.ctx-item:hover {
+    background: #2a3942;
+}
+
 </style>
 </head>
 
 <body>
 
-<h2>📸 Undelivered Media (Single Tick Monitor)</h2>
+<h2>📸 Undelivered Media Monitor</h2>
 
 <div class="controls">
     <button class="refresh" onclick="loadData()">Refresh</button>
@@ -152,12 +175,21 @@ tr:hover {
 </table>
 
 
+<!-- Right Click Menu -->
+<div id="contextMenu">
+    <div class="ctx-item" onclick="ctxOpenChat()">Open Chat</div>
+    <div class="ctx-item" onclick="ctxRetry()">Retry Media</div>
+    <div class="ctx-item" onclick="ctxMarkDelivered()">Mark Delivered</div>
+</div>
+
+
 <script>
 
 let cache = new Map();
+let selectedWhatsappId = null;
+let selectedPhone = null;
 
-let statusLabel = row.status === "failed" ? "FAILED" : "SINGLE TICK";
-let statusColor = row.status === "failed" ? "#ff0000" : "#ff3b3b";
+
 // LOAD DATA
 async function loadData(){
 
@@ -182,17 +214,35 @@ async function loadData(){
         const tr = document.createElement("tr");
         tr.id = row.whatsapp_id;
 
-        // Age detector
+        // Time calculation
         const msgTime = new Date(row.timestamp);
         const ageMin = (Date.now() - msgTime) / 60000;
+        const expired = (ageMin / 60) > 24;
 
         if(ageMin > 10){
             tr.classList.add("old");
         }
 
-        // Redirect to inbox
+        // Status badge
+        let statusLabel = row.status === "failed" ? "FAILED" : "SINGLE TICK";
+        let statusColor = row.status === "failed" ? "#ff0000" : "#ff3b3b";
+
+        // Action buttons
+        let retryHtml = expired
+            ? `<span class="expired">TIME EXPIRED</span>`
+            : `<button class="retry-btn" onclick="retrySend(event,'${row.whatsapp_id}')">Retry</button>`;
+
+        // Click → open inbox new tab
         tr.onclick = () => {
-          window.open(`/inbox?phone=${row.user_phone}`, "_blank");
+            window.open(`/inbox?phone=${row.user_phone}`, "_blank");
+        };
+
+        // Right click menu
+        tr.oncontextmenu = (e) => {
+            e.preventDefault();
+            selectedWhatsappId = row.whatsapp_id;
+            selectedPhone = row.user_phone;
+            showContextMenu(e.pageX, e.pageY);
         };
 
         tr.innerHTML = `
@@ -200,16 +250,13 @@ async function loadData(){
             <td>${row.media_type}</td>
             <td>${row.message || "-"}</td>
             <td>${new Date(row.timestamp).toLocaleString('en-GB')}</td>
-            <td><  <span class="badge" style="background:${statusColor}">
-      ${statusLabel}
-  </span>
-</td>
             <td>
-                <button class="retry-btn"
-                        onclick="retrySend(event,'${row.whatsapp_id}')">
-                    Retry
-                </button>
-
+                <span class="badge" style="background:${statusColor}">
+                    ${statusLabel}
+                </span>
+            </td>
+            <td>
+                ${retryHtml}
                 <button class="delivered-btn"
                         onclick="markDelivered(event,'${row.whatsapp_id}')">
                     Mark Delivered
@@ -220,7 +267,7 @@ async function loadData(){
         tbody.appendChild(tr);
     });
 
-    // AUTO REMOVE delivered
+    // Auto remove resolved rows
     cache.forEach((v, key) => {
 
         if(!newSet.has(key)){
@@ -276,7 +323,7 @@ async function retrySend(event, wa_id){
 }
 
 
-// MANUAL MARK DELIVERED
+// MARK DELIVERED
 async function markDelivered(event, wa_id){
 
     event.stopPropagation();
@@ -302,6 +349,31 @@ async function markDelivered(event, wa_id){
 
         cache.delete(wa_id);
     }
+}
+
+
+// CONTEXT MENU
+function showContextMenu(x, y){
+    const menu = document.getElementById("contextMenu");
+    menu.style.left = x + "px";
+    menu.style.top = y + "px";
+    menu.style.display = "block";
+}
+
+document.addEventListener("click", () => {
+    document.getElementById("contextMenu").style.display = "none";
+});
+
+function ctxOpenChat(){
+    window.open(`/inbox?phone=${selectedPhone}`, "_blank");
+}
+
+function ctxRetry(){
+    retrySend(event, selectedWhatsappId);
+}
+
+function ctxMarkDelivered(){
+    markDelivered(event, selectedWhatsappId);
 }
 
 

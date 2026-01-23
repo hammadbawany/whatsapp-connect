@@ -4407,6 +4407,7 @@ def undelivered_media():
             media_type,
             message,
             whatsapp_id,
+            status,
             timestamp
         FROM messages
         WHERE
@@ -4416,10 +4417,12 @@ def undelivered_media():
             AND media_type <> 'audio'
             AND status IN ('sent','failed')
             AND user_phone != '923468202114'
+            AND COALESCE(manual_delivered,false) = false
         ORDER BY timestamp DESC
     """, (account_id,))
 
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
 
@@ -4435,6 +4438,7 @@ def undelivered_media():
 def undelivered_media_page():
     return render_template("undelivered_media.html")
 
+
 @app.route("/api/retry_media", methods=["POST"])
 @login_required
 def retry_media():
@@ -4448,7 +4452,7 @@ def retry_media():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Get original message
+    # Fetch original message
     cur.execute("""
         SELECT
             user_phone,
@@ -4468,7 +4472,7 @@ def retry_media():
         conn.close()
         return jsonify({"error": "Message not found"}), 404
 
-    # Get account credentials
+    # Get WhatsApp credentials
     cur.execute("""
         SELECT phone_number_id, access_token
         FROM whatsapp_accounts
@@ -4478,6 +4482,8 @@ def retry_media():
     acc = cur.fetchone()
 
     if not acc:
+        cur.close()
+        conn.close()
         return jsonify({"error": "Account not found"}), 400
 
     send_url = f"https://graph.facebook.com/v20.0/{acc['phone_number_id']}/messages"
@@ -4491,7 +4497,7 @@ def retry_media():
         }
     }
 
-    # Add caption if exists
+    # Add caption if present
     if msg["message"]:
         payload[msg["media_type"]]["caption"] = msg["message"]
 
@@ -4508,11 +4514,31 @@ def retry_media():
     if resp.get("messages"):
         new_wa_id = resp["messages"][0].get("id")
 
-    # Save new outbound attempt
+    # If resend successful
     if new_wa_id:
+
+        # Mark OLD message resolved (manual override)
+        cur.execute("""
+            UPDATE messages
+            SET manual_delivered = TRUE,
+                manual_delivered_at = NOW()
+            WHERE whatsapp_id = %s
+        """, (wa_id,))
+
+        # Insert NEW outbound message
         cur.execute("""
             INSERT INTO messages
-            (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, status, timestamp)
+            (
+                whatsapp_account_id,
+                user_phone,
+                sender,
+                media_type,
+                media_id,
+                message,
+                whatsapp_id,
+                status,
+                timestamp
+            )
             VALUES (%s,%s,'agent',%s,%s,%s,%s,'sent',NOW())
         """, (
             msg["whatsapp_account_id"],
@@ -4522,12 +4548,6 @@ def retry_media():
             msg["message"],
             new_wa_id
         ))
-        cur.execute("""
-            UPDATE messages
-            SET manual_delivered = TRUE,
-                manual_delivered_at = NOW()
-            WHERE whatsapp_id = %s
-        """, (wa_id,))
 
         conn.commit()
 
@@ -4535,6 +4555,7 @@ def retry_media():
     conn.close()
 
     return jsonify({"success": True})
+
 
 @app.route("/api/mark_delivered", methods=["POST"])
 @login_required
@@ -4549,9 +4570,11 @@ def mark_delivered():
     conn = get_conn()
     cur = conn.cursor()
 
+    # SAFE override (do NOT touch WhatsApp webhook status)
     cur.execute("""
         UPDATE messages
-        SET status = 'delivered'
+        SET manual_delivered = TRUE,
+            manual_delivered_at = NOW()
         WHERE whatsapp_id = %s
     """, (wa_id,))
 
