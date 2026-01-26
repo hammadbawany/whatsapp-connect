@@ -334,6 +334,8 @@ def run_scheduled_automation():
         return
 
     logging.warning("[CRON] Auto Design Sender Running")
+    logging.warning("[CRON] Auto Design Sender Running")
+
 
     init_log_table()
 
