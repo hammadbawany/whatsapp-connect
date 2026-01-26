@@ -727,6 +727,7 @@ def history():
             m.deleted_for_me,
             m.deleted_for_everyone,
             m.intent,              -- 🔥 ADDED THIS
+            m.is_legacy,          -- ✅ ADD THIS
 
             -- reply message fields
             r.sender        AS reply_sender,
