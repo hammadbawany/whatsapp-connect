@@ -32,6 +32,14 @@ IGNORED_FOLDERS = [
 
 MOVE_DESTINATION_BASE = "/1 daniyal/Auto/send to customer"
 
+def normalize_10(phone):
+    p = "".join(filter(str.isdigit, phone))
+
+    # Remove leading 92 if exists
+    if p.startswith("92") and len(p) > 10:
+        p = p[2:]
+
+    return p[-10:]
 
 # ====================================================
 # DB + DROPBOX HELPERS
@@ -272,7 +280,7 @@ def normalize_phone(phone):
 def send_file_via_meta_and_db(phone, file_bytes, filename, mime_type, caption):
 
     phone = normalize_phone(phone)
-
+    phone = normalize_10(p)
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
