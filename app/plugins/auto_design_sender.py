@@ -296,8 +296,7 @@ def normalize_phone(phone):
 
 def send_file_via_meta_and_db(phone, file_bytes, filename, mime_type, caption):
 
-    phone = normalize_phone(phone)
-    phone = normalize_10(phone)
+
     phone = normalize_phone_meta(phone)
 
     conn = get_conn()
