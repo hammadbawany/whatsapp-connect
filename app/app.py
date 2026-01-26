@@ -165,10 +165,19 @@ def webhook():
 
     # 1️⃣ VERIFICATION
     if request.method == "GET":
-        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
-        if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
-            return request.args.get("hub.challenge"), 200
-        return "Verification failed", 403
+
+        VERIFY_TOKEN = "lifafay123"   # TEMP: hardcode for testing
+
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+
+        print("VERIFY HIT:", mode, token)
+
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return str(challenge)   # ⚠️ MUST be raw string
+        else:
+            return "Verification failed", 403
 
     # 2️⃣ INCOMING EVENTS
     try:

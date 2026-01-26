@@ -672,14 +672,20 @@
 </div>
 <input type="file" id="hidden-file-input" style="display:none;">
 <div id="msg-context-menu" class="context-menu">
+
     <div class="menu-item" data-action="reply">Reply</div>
     <div class="menu-item" data-action="forward">Forward</div>
 
     <div class="menu-divider"></div>
 
+    <div class="menu-item retry-item" data-action="retry">Retry Media</div>
+
+    <div class="menu-divider"></div>
+
     <div class="menu-item" data-action="delete-me">Delete for me</div>
-    /*<div class="menu-item danger" data-action="delete-everyone">Delete for everyone</div>*/
+
 </div>
+
 
 <div class="modal-overlay" id="tag-modal">
     <div class="modal">
@@ -735,6 +741,7 @@
     // ==========================================
     // 1. GLOBAL VARIABLES & STATE
     // ==========================================
+
     let currentPhone = null;
     let availableTags = [];
     let taggingPhone = null;
@@ -1636,22 +1643,36 @@ async function executeSendTemplate(name, lang, bodyText, variableArray) {
 
     // --- CLICK HANDLERS (Delegation) ---
     let selectedMsg = null;
+    let selectedMsgTimestamp = null;
+    let selectedMsgType = null;
     document.getElementById('msg-context-menu').addEventListener('click', async (e) => {
         const action = e.target.dataset.action; if(!action || !selectedMsg) return;
         if(action==='reply') setReplyTarget(selectedMsg);
         else if(action==='forward') { clearReplyTarget(); msgInputEl.value=selectedMsg.message||''; msgInputEl.focus(); }
         else if(action==='delete-me') await deleteForMe(selectedMsg);
         else if(action==='delete-everyone') await deleteForEveryone(selectedMsg);
+        else if(action==='retry') retryInboxMessage();
+
         document.getElementById('msg-context-menu').style.display='none';
     });
 
     document.addEventListener('click', function (e) {
         // Open Msg Menu
         if(e.target.closest('.msg-actions')) {
-            e.stopPropagation();
-            const row = e.target.closest('.msg');
-            selectedMsg = messageById.get(row.dataset.msgId);
-            const m = document.getElementById('msg-context-menu');
+
+    e.stopPropagation();
+
+    const row = e.target.closest('.msg');
+
+    selectedMsg = messageById.get(row.dataset.msgId);
+
+    selectedMsgTimestamp = selectedMsg.timestamp;
+    selectedMsgType = selectedMsg.media_type;
+
+    toggleRetryVisibility();
+
+    const m = document.getElementById('msg-context-menu');
+
 
             // 1. Show temporarily to calculate height
             m.style.visibility = 'hidden';
@@ -2025,6 +2046,62 @@ document.addEventListener("DOMContentLoaded", () => {
         ignoreBtn.onclick = hideAutomationBanner;
     }
 });
+function toggleRetryVisibility(){
+
+    const retryBtn = document.querySelector(".retry-item");
+
+    // Only show for media messages
+    if(!selectedMsgType){
+        retryBtn.style.display = "none";
+        return;
+    }
+
+    // Hide for text
+    if(selectedMsgType === "text"){
+        retryBtn.style.display = "none";
+        return;
+    }
+
+    // 24 hour session rule
+    const msgTime = new Date(selectedMsgTimestamp);
+    const hours = (Date.now() - msgTime) / 3600000;
+
+    if(hours > 24){
+        retryBtn.innerText = "Time Expired";
+        retryBtn.style.pointerEvents = "none";
+        retryBtn.style.opacity = "0.5";
+    } else {
+        retryBtn.innerText = "Retry Media";
+        retryBtn.style.pointerEvents = "auto";
+        retryBtn.style.opacity = "1";
+    }
+
+    retryBtn.style.display = "block";
+}
+
+async function retryInboxMessage(){
+
+    if(!selectedMsgId) return;
+
+    if(!confirm("Retry sending this media?")) return;
+
+    const res = await fetch("/api/retry_media", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+            whatsapp_id: selectedMsgId
+        })
+    });
+
+    const data = await res.json();
+
+    if(data.success){
+        alert("✅ Media resent successfully");
+    }else{
+        alert("❌ Retry failed");
+    }
+}
+
 </script>
 </body>
 </html>
