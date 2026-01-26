@@ -18,8 +18,8 @@ design_sender_bp = Blueprint("design_sender", __name__)
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
 APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
 
-#2nd number TARGET_WABA_ID = "1628402398537645"
-TARGET_WABA_ID = "881106361269982"
+TARGET_WABA_ID = "1628402398537645"
+#TARGET_WABA_ID = "881106361269982"
 
 TARGET_PATHS = [
     "/1 daniyal/Auto"
