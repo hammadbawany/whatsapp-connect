@@ -18,8 +18,8 @@ design_sender_bp = Blueprint("design_sender", __name__)
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
 APP_SECRET = os.getenv("DROPBOX_APP_SECRET")
 
-TARGET_WABA_ID = "1628402398537645"
-#TARGET_WABA_ID = "881106361269982"
+#TARGET_WABA_ID = "1628402398537645"
+TARGET_WABA_ID = "881106361269982"
 
 TARGET_PATHS = [
     "/1 daniyal/Auto"
@@ -36,6 +36,26 @@ MOVE_DESTINATION_BASE = "/1 daniyal/Auto/send to customer"
 # ====================================================
 # DB + DROPBOX HELPERS
 # ====================================================
+def get_active_whatsapp_account_id():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id
+        FROM whatsapp_accounts
+        WHERE waba_id = %s
+        LIMIT 1
+    """, (TARGET_WABA_ID,))
+
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    if not row:
+        return None
+
+    return row[0]
 
 def init_log_table():
     conn = get_conn()
@@ -360,13 +380,21 @@ def run_scheduled_automation():
 
         fmt = ",".join(["%s"] * len(all_phones))
 
+        active_account_id = get_active_whatsapp_account_id()
+
+        if not active_account_id:
+            logging.error("[CRON] No active WhatsApp account found")
+            return
+
         cur.execute(f"""
             SELECT RIGHT(user_phone,10), MAX(timestamp)
             FROM messages
             WHERE sender='customer'
-            AND RIGHT(user_phone,10) IN ({fmt})
+              AND whatsapp_account_id = %s
+              AND is_legacy = FALSE
+              AND RIGHT(user_phone,10) IN ({fmt})
             GROUP BY RIGHT(user_phone,10)
-        """, tuple(all_phones))
+        """, (active_account_id, *all_phones))
 
         for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
