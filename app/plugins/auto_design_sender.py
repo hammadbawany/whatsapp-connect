@@ -37,15 +37,16 @@ MOVE_DESTINATION_BASE = "/1 daniyal/Auto/send to customer"
 # DB + DROPBOX HELPERS
 # ====================================================
 def get_active_whatsapp_account_id():
+
     conn = get_conn()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
 
     cur.execute("""
         SELECT id
         FROM whatsapp_accounts
-        WHERE waba_id = %s
+        ORDER BY id DESC
         LIMIT 1
-    """, (TARGET_WABA_ID,))
+    """)
 
     row = cur.fetchone()
 
@@ -55,8 +56,7 @@ def get_active_whatsapp_account_id():
     if not row:
         return None
 
-    return row[0]
-
+    return row["id"]
 def init_log_table():
     conn = get_conn()
     cur = conn.cursor()

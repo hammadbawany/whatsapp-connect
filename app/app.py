@@ -3350,7 +3350,7 @@ def external_send_order():
         amount = str(data.get("amount", "")).strip()
 
         template_name = data.get("template_name", "order_received")
-        language = data.get("language", "en_US")
+        language = data.get("language", "en")
 
         phone = normalize_phone(raw_phone)
         if not phone:
@@ -3461,7 +3461,7 @@ def external_send_order():
             f"Payable Amount: rs {amount}.\n\n"
             "Click below to manage your order."
         )
-        template_name="order_management_3"
+        template_name="order_management_2"
         cur.execute("""
             INSERT INTO messages (
                 whatsapp_account_id,
