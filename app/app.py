@@ -164,20 +164,35 @@ def webhook():
     ai_handled = False
 
     # 1️⃣ VERIFICATION
+    print("=== WEBHOOK HIT ===")
+    print("METHOD:", request.method)
+    print("ARGS:", request.args)
+    print("HEADERS:", dict(request.headers))
+
     if request.method == "GET":
 
-        VERIFY_TOKEN = "lifafay123"   # TEMP: hardcode for testing
+        VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "lifafay123")
 
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
         challenge = request.args.get("hub.challenge")
 
-        print("VERIFY HIT:", mode, token)
+        print("MODE:", mode)
+        print("TOKEN RECEIVED:", token)
+        print("EXPECTED TOKEN:", VERIFY_TOKEN)
+        print("CHALLENGE:", challenge)
 
         if mode == "subscribe" and token == VERIFY_TOKEN:
-            return str(challenge)   # ⚠️ MUST be raw string
-        else:
-            return "Verification failed", 403
+            print("✅ VERIFICATION SUCCESS")
+            return challenge, 200
+
+        print("❌ VERIFICATION FAILED")
+        return "Verification failed", 403
+
+    # POST handling (messages)
+    print("POST BODY:", request.get_data(as_text=True))
+
+    return "OK", 200
 
     # 2️⃣ INCOMING EVENTS
     try:
