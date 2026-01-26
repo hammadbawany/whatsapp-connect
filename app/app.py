@@ -21,7 +21,9 @@ import tempfile
 from flask import Response
 import traceback
 import subprocess
-TARGET_WABA_ID = "1628402398537645"
+#TARGET_WABA_ID = "1628402398537645"
+TARGET_WABA_ID = "881106361269982"
+
 from app.r2_client import get_r2_client
 import time
 import re
