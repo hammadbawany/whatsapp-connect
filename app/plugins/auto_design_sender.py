@@ -442,7 +442,12 @@ def run_scheduled_automation():
             GROUP BY phone10
         """, (active_account_id, *all_phones))
 
-        for phone10, ts in cur.fetchall():
+        rows = cur.fetchall()
+
+        for r in rows:
+            phone10 = r["phone10"]
+            ts = r["max"]
+
             responded_recent[phone10] = ts
 
         cur.close()
