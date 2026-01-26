@@ -218,21 +218,29 @@ def move_folder_after_sending(dbx, current_path, folder_name):
 
 def parse_folder_name(folder_name):
 
-    phones = []
+    phones = set()
 
-    for m in re.finditer(r'(?:^|[\s\-_])((?:0092|92|0)?3\d{2})\s+(\d{7})', folder_name):
-        phones.append(m.group(1) + m.group(2))
+    # 🔹 PRIMARY MATCH (structured)
+    for m in re.finditer(r'(?:^|[\s\-_])((?:0092|92|0)?3\d{2})\s*(\d{7})', folder_name):
+        phones.add(m.group(1) + m.group(2))
+
+    # 🔹 FALLBACK MATCH (any long number anywhere)
+    for m in re.findall(r'(?:0092|92|0)?3\d{9}', folder_name):
+        phones.add(m)
 
     norm = []
 
     for p in phones:
         p = re.sub(r"\D", "", p)
 
+        if p.startswith("0092"):
+            p = p[4:]
         if p.startswith("03"):
-            norm.append("92" + p[1:])
+            p = "92" + p[1:]
         elif p.startswith("3"):
-            norm.append("92" + p)
-        else:
+            p = "92" + p
+
+        if len(p) == 12:
             norm.append(p)
 
     return {
@@ -246,9 +254,18 @@ def parse_folder_name(folder_name):
 # ====================================================
 
 def normalize_phone(phone):
+    if not phone:
+        return ""
     p = re.sub(r"\D", "", str(phone))
-    if p.startswith("03"):
+
+    # Pakistan mobile handling
+    if p.startswith("03") and len(p) == 11:
         return "92" + p[1:]
+
+    # Already international
+    if p.startswith("92") and len(p) == 12:
+        return p
+
     return p
 
 
