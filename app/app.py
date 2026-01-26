@@ -741,8 +741,10 @@ def history():
 
         WHERE
             m.user_phone = %s
-            AND m.whatsapp_account_id = %s
-
+            AND (
+                m.whatsapp_account_id = %s
+                OR m.is_legacy = TRUE
+            )
         ORDER BY m.timestamp ASC
     """, (phone, account_id))
 
@@ -767,7 +769,8 @@ def history():
             "whatsapp_id": r["whatsapp_id"],
             "deleted_for_me": r["deleted_for_me"],
             "deleted_for_everyone": r["deleted_for_everyone"],
-            "intent": r["intent"]  # 🔥 ADDED THIS
+            "intent": r["intent"],
+            "is_legacy": r["is_legacy"],
         }
 
         if r["reply_whatsapp_id"]:
