@@ -5,7 +5,7 @@ import json
 import requests
 import dropbox
 import mimetypes
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, session, request
 from app.db import get_conn
 from psycopg2.extras import RealDictCursor
@@ -456,7 +456,7 @@ def run_scheduled_automation():
                 last_time = responded_recent[short]
 
                 # ✅ STRICT LOCAL TIME CHECK
-                if datetime.now() - last_time <= timedelta(hours=24):
+                if datetime.now(timezone.utc) - last_time <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
                     break
