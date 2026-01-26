@@ -209,13 +209,33 @@ def webhook():
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Force Target WABA
-        cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
-        account_row = cur.fetchone()
-        if not account_row:
-            cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
-            account_row = cur.fetchone()
-        whatsapp_account_id = account_row["id"] if account_row else None
+        # ✅ Use incoming webhook WABA (CORRECT)
+        incoming_waba_id = entry[0]["id"]
 
+        print("📌 Incoming WABA:", incoming_waba_id)
+
+        cur.execute("""
+        SELECT id
+        FROM whatsapp_accounts
+        WHERE waba_id = %s
+        LIMIT 1
+        """, (incoming_waba_id,))
+
+        account_row = cur.fetchone()
+
+        if not account_row:
+            print("❌ WABA NOT FOUND IN DB:", incoming_waba_id)
+            return "OK", 200
+
+        whatsapp_account_id = account_row["id"]
+
+        print("✅ Using whatsapp_account_id:", whatsapp_account_id)
+
+        whatsapp_account_id = account_row["id"] if account_row else None
+        print("💾 SAVING MESSAGE")
+        print("FROM:", phone)
+        print("TEXT:", text)
+        print("ACCOUNT:", whatsapp_account_id)
         # Capture Contact
         contacts_data = value.get("contacts", [])
         if contacts_data:
@@ -223,6 +243,7 @@ def webhook():
             try:
                 cur.execute("INSERT INTO contacts (phone, name) VALUES (%s, %s) ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name", (c.get("wa_id"), c.get("profile", {}).get("name")))
             except: pass
+        print("✅ MESSAGE COMMITTED TO DB")
 
         # 4️⃣ PROCESS MESSAGES
         for msg in value.get("messages", []):
