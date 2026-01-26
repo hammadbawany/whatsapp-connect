@@ -559,71 +559,88 @@ def list_users():
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # 1. Get Account ID
+    # 1. Get Active Account ID
     cur.execute("SELECT id FROM whatsapp_accounts WHERE waba_id = %s LIMIT 1", (TARGET_WABA_ID,))
     row = cur.fetchone()
+
     if not row:
         cur.execute("SELECT id FROM whatsapp_accounts ORDER BY id DESC LIMIT 1")
         row = cur.fetchone()
 
     if not row:
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
         return jsonify([])
 
     account_id = row['id']
 
-    # 2. Get Users + Last Message
+    # 2. Get Users + Last Message + Legacy Flag
     query = """
         WITH LastMsg AS (
             SELECT
                 user_phone,
-                MAX(timestamp) as last_ts,
-                COUNT(CASE WHEN status = 'received' THEN 1 END) as unread_count
+                MAX(timestamp) AS last_ts,
+                COUNT(CASE WHEN status = 'received' THEN 1 END) AS unread_count,
+                BOOL_OR(is_legacy) AS is_legacy
             FROM messages
             WHERE whatsapp_account_id = %s
+               OR is_legacy = TRUE
             GROUP BY user_phone
         )
         SELECT
             c.phone,
             c.name,
             lm.last_ts,
-            COALESCE(lm.unread_count, 0) as unread_count,
-            m.message as last_message,
+            COALESCE(lm.unread_count, 0) AS unread_count,
+            lm.is_legacy,
+            m.message AS last_message,
             m.media_type
         FROM contacts c
         INNER JOIN LastMsg lm ON c.phone = lm.user_phone
-        LEFT JOIN messages m ON lm.user_phone = m.user_phone AND lm.last_ts = m.timestamp
+        LEFT JOIN messages m
+            ON lm.user_phone = m.user_phone
+           AND lm.last_ts = m.timestamp
         ORDER BY lm.last_ts DESC
     """
+
     cur.execute(query, (account_id,))
     users = cur.fetchall()
 
-    # 3. Get Tags for these users (Efficient Batch Fetch)
+    # 3. Get Tags (Batch)
     if users:
         phones = [u['phone'] for u in users]
+
         cur.execute("""
             SELECT ct.contact_phone, t.name, t.color
             FROM contact_tags ct
             JOIN tags t ON ct.tag_id = t.id
             WHERE ct.contact_phone = ANY(%s)
         """, (phones,))
+
         tags_rows = cur.fetchall()
 
-        # Map tags to phones
         tags_map = {}
+
         for row in tags_rows:
             p = row['contact_phone']
-            if p not in tags_map: tags_map[p] = []
-            tags_map[p].append({'name': row['name'], 'color': row['color']})
+            if p not in tags_map:
+                tags_map[p] = []
+            tags_map[p].append({
+                'name': row['name'],
+                'color': row['color']
+            })
 
-        # Attach tags to user objects
         for u in users:
             u['tags'] = tags_map.get(u['phone'], [])
+
             if u['last_ts']:
                 u['last_ts'] = u['last_ts'].isoformat()
-                if not u['last_ts'].endswith("Z"): u['last_ts'] += "Z"
+                if not u['last_ts'].endswith("Z"):
+                    u['last_ts'] += "Z"
 
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
+
     return jsonify(users)
 
 '''

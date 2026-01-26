@@ -7,6 +7,26 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
+    /* LEGACY CHAT STYLE */
+.chat-item.legacy {
+    background: rgba(255,255,255,0.03);
+    opacity: 0.75;
+    border-left: 4px solid #888;
+}
+
+.chat-item.legacy:hover {
+    background: rgba(255,255,255,0.05);
+}
+
+.legacy-badge {
+    font-size: 10px;
+    background: #555;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+}
+
     /* Update Filter Badge Styling */
     /* Filter Bar Container */
     .filter-bar {
@@ -941,7 +961,13 @@
         h.style.backgroundColor = getAvatarColor(phone);
         h.innerText = name ? getInitials(name) : '?';
 
-        msgInputEl.disabled = false;
+        if (activeItem && activeItem.classList.contains("legacy")) {
+            msgInputEl.disabled = true;
+            msgInputEl.placeholder = "This is an archived chat (old WhatsApp account)";
+        } else {
+            msgInputEl.disabled = false;
+            msgInputEl.placeholder = "Type a message";
+        }
         msgInputEl.focus();
 
         document.getElementById('messages').innerHTML =
@@ -1347,7 +1373,8 @@
 
           const div = document.createElement('div');
           div.id = `chat-item-${c.phone}`;
-          div.className = `chat-item ${currentPhone === c.phone ? 'active' : ''}`;
+          const legacyClass = c.is_legacy ? 'legacy' : '';
+          div.className = `chat-item ${legacyClass} ${currentPhone === c.phone ? 'active' : ''}`;
           div.dataset.phone = c.phone; // <--- THIS LINE WAS MISSING
 
           div.onclick = () => openChat(c.phone, c.name);
@@ -1357,7 +1384,10 @@
               <div class="chat-info">
                   <div class="chat-top">
                       <div style="display:flex; align-items:center; gap: 6px; overflow:hidden;">
-                          <span class="chat-name">${c.name||c.phone}</span>
+                      <span class="chat-name">
+                        ${c.name||c.phone}
+                        ${c.is_legacy ? '<span class="legacy-badge">OLD</span>' : ''}
+                      </span>
                           <span class="material-icons"
                                 style="font-size: 16px; color: #8696a0; cursor: pointer; opacity: 0.8;"
                                 title="Manage Tags"
