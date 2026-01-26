@@ -409,7 +409,8 @@ def run_scheduled_automation():
         candidates.append(parsed)
 
         for p in parsed["phones"]:
-            all_phones.add(p[-10:])
+            clean = re.sub(r'\D', '', p)
+            all_phones.add(clean[-10:])
 
     # ---------------------------
     # Fetch LAST CUSTOMER reply time
