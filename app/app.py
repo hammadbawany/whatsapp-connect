@@ -165,11 +165,14 @@ def get_current_user():
 def webhook():
     ai_handled = False
 
-    # 1️⃣ VERIFICATION
     print("=== WEBHOOK HIT ===")
     print("METHOD:", request.method)
     print("ARGS:", request.args)
     print("HEADERS:", dict(request.headers))
+
+    # --------------------------
+    # 1️⃣ VERIFICATION HANDSHAKE
+    # --------------------------
 
     if request.method == "GET":
 
@@ -191,63 +194,83 @@ def webhook():
         print("❌ VERIFICATION FAILED")
         return "Verification failed", 403
 
-    # POST handling (messages)
-    print("POST BODY:", request.get_data(as_text=True))
+    # --------------------------
+    # 2️⃣ POST EVENTS
+    # --------------------------
 
-    return "OK", 200
+    raw_body = request.get_data(as_text=True)
+    print("POST BODY:", raw_body)
 
-    # 2️⃣ INCOMING EVENTS
     try:
-        data = json.loads(request.get_data(as_text=True))
+        data = json.loads(raw_body)
+
         entry = data.get("entry", [])
-        if not entry: return "OK", 200
+        if not entry:
+            return "OK", 200
+
         changes = entry[0].get("changes", [])
-        if not changes: return "OK", 200
+        if not changes:
+            return "OK", 200
+
         value = changes[0].get("value", {})
 
         conn = get_conn()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Force Target WABA
-        # ✅ Use incoming webhook WABA (CORRECT)
+        # --------------------------
+        # ✅ USE INCOMING WABA ID
+        # --------------------------
+
         incoming_waba_id = entry[0]["id"]
 
         print("📌 Incoming WABA:", incoming_waba_id)
 
         cur.execute("""
-        SELECT id
-        FROM whatsapp_accounts
-        WHERE waba_id = %s
-        LIMIT 1
+            SELECT id
+            FROM whatsapp_accounts
+            WHERE waba_id = %s
+            LIMIT 1
         """, (incoming_waba_id,))
 
         account_row = cur.fetchone()
 
         if not account_row:
             print("❌ WABA NOT FOUND IN DB:", incoming_waba_id)
+            return "OK", 200
 
         whatsapp_account_id = account_row["id"]
 
         print("✅ Using whatsapp_account_id:", whatsapp_account_id)
 
-        whatsapp_account_id = account_row["id"] if account_row else None
-        print("💾 SAVING MESSAGE")
-        #print("FROM:", phone)
-        #print("TEXT:", text)
-        print("ACCOUNT:", whatsapp_account_id)
-        # Capture Contact
+        # --------------------------
+        # 3️⃣ SAVE CONTACT (WITH NAME)
+        # --------------------------
+
         contacts_data = value.get("contacts", [])
+
         if contacts_data:
             c = contacts_data[0]
-            try:
-                cur.execute("INSERT INTO contacts (phone, name) VALUES (%s, %s) ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name", (c.get("wa_id"), c.get("profile", {}).get("name")))
-            except: pass
-        print("✅ MESSAGE COMMITTED TO DB")
+            phone_contact = c.get("wa_id")
+            name = c.get("profile", {}).get("name")
 
-        # 4️⃣ PROCESS MESSAGES
-        for msg in value.get("messages", []):
             try:
-                phone = normalize_phone(msg.get("from"))
+                cur.execute("""
+                    INSERT INTO contacts (phone, name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (phone)
+                    DO UPDATE SET name = EXCLUDED.name
+                """, (phone_contact, name))
+            except:
+                pass
+
+        # --------------------------
+        # 4️⃣ PROCESS MESSAGES
+        # --------------------------
+
+        for msg in value.get("messages", []):
+
+            try:
+                phone = msg.get("from")   # RAW WA ID (do NOT normalize for DB)
                 wa_id = msg.get("id")
                 msg_type = msg.get("type")
 
@@ -258,152 +281,218 @@ def webhook():
 
                 print(f"\n📨 [WEBHOOK] New Message from {phone} | Type: {msg_type}")
 
-                # Ensure contact exists
-                cur.execute("INSERT INTO contacts (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
-
                 # -----------------------------
                 # MEDIA HANDLING
                 # -----------------------------
+
                 if msg_type in ["image", "video", "audio", "voice", "document", "sticker"]:
+
                     media_obj = msg.get(msg_type, {})
-                    # Insert with intent='media'
+
                     cur.execute("""
                         INSERT INTO messages
-                        (whatsapp_account_id, user_phone, sender, media_type, media_id, message, whatsapp_id, context_whatsapp_id, status, timestamp, intent)
-                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s, 'received', NOW(), 'media')
-                    """, (whatsapp_account_id, phone, msg_type, media_obj.get("id"), media_obj.get("caption", ""), wa_id, context_whatsapp_id))
+                        (whatsapp_account_id, user_phone, sender, media_type, media_id,
+                         message, whatsapp_id, context_whatsapp_id, status, timestamp, intent)
+                        VALUES (%s, %s, 'customer', %s, %s, %s, %s, %s,
+                                'received', NOW(), 'media')
+                    """, (
+                        whatsapp_account_id,
+                        phone,
+                        msg_type,
+                        media_obj.get("id"),
+                        media_obj.get("caption", ""),
+                        wa_id,
+                        context_whatsapp_id
+                    ))
+
                     conn.commit()
                     continue
 
                 # -----------------------------
                 # TEXT HANDLING
                 # -----------------------------
+
                 text = ""
-                if msg_type == "text": text = msg.get("text", {}).get("body", "")
+
+                if msg_type == "text":
+                    text = msg.get("text", {}).get("body", "")
+
                 elif msg_type == "interactive":
                     i = msg.get("interactive", {})
-                    text = i.get("button_reply", {}).get("title", "") or i.get("list_reply", {}).get("title", "")
-                elif msg_type == "button": text = msg.get("button", {}).get("text", "")
+                    text = (
+                        i.get("button_reply", {}).get("title", "")
+                        or i.get("list_reply", {}).get("title", "")
+                    )
 
-                if not text: continue
+                elif msg_type == "button":
+                    text = msg.get("button", {}).get("text", "")
 
-                # 🟢 STEP A: GET CONTEXT MESSAGE (To help detection)
+                if not text:
+                    continue
+
+                # -----------------------------
+                # CONTEXT LOOKUP
+                # -----------------------------
+
                 agent_context_msg = None
                 row = None
+
                 if context_whatsapp_id:
-                    cur.execute("SELECT message FROM messages WHERE whatsapp_id = %s AND sender = 'agent'", (context_whatsapp_id,))
+                    cur.execute("""
+                        SELECT message
+                        FROM messages
+                        WHERE whatsapp_id = %s AND sender = 'agent'
+                    """, (context_whatsapp_id,))
                     row = cur.fetchone()
+
                     if row:
                         agent_context_msg = row["message"]
 
-                # 🟢 STEP B: DETECT INTENT *BEFORE* SAVING
+                # -----------------------------
+                # INTENT DETECTION
+                # -----------------------------
+
                 intent = detect_design_intent(text, agent_context_msg)
+
                 print(f"🧠 [INTENT DETECTED]: {intent} (Text: {text})")
 
-                # 🟢 STEP C: SAVE MESSAGE *WITH* INTENT
+                # -----------------------------
+                # SAVE MESSAGE
+                # -----------------------------
+
                 cur.execute("""
                     INSERT INTO messages
-                    (whatsapp_account_id, user_phone, sender, message, whatsapp_id, context_whatsapp_id, status, timestamp, intent)
-                    VALUES (%s, %s, 'customer', %s, %s, %s, 'received', NOW(), %s)
-                """, (whatsapp_account_id, phone, text, wa_id, context_whatsapp_id, intent))
+                    (whatsapp_account_id, user_phone, sender, message,
+                     whatsapp_id, context_whatsapp_id, status, timestamp, intent)
+                    VALUES (%s, %s, 'customer', %s, %s, %s,
+                            'received', NOW(), %s)
+                """, (
+                    whatsapp_account_id,
+                    phone,
+                    text,
+                    wa_id,
+                    context_whatsapp_id,
+                    intent
+                ))
+
                 conn.commit()
 
                 lower = text.lower().strip()
 
                 # -----------------------------------------------------
-                # 🛑 1. PRIORITY: PENDING TEXT CONFIRMATIONS (Button Clicks)
+                # 🛑 PRIORITY: PENDING TEXT CONFIRMATIONS
                 # -----------------------------------------------------
+
                 if phone in PENDING_TEXT_CONFIRMATIONS:
-                    # ... [Keep your existing logic for Text Confirmations here] ...
-                    # (Code shortened for brevity, keep your original logic)
+
                     pending = PENDING_TEXT_CONFIRMATIONS[phone]
+
                     button_id = ""
                     if msg_type == "interactive":
                         button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
 
-                    is_confirm = (button_id == "confirm_text") or (lower in {"confirm", "confirmed", "✅ confirm", "yes", "ok", "done", "confirm text"})
-                    is_edit = (button_id == "edit_text") or (lower in {"edit", "change text", "no", "change", "edit text"})
+                    is_confirm = (
+                        button_id == "confirm_text"
+                        or lower in {"confirm", "confirmed", "✅ confirm", "yes", "ok", "done", "confirm text"}
+                    )
+
+                    is_edit = (
+                        button_id == "edit_text"
+                        or lower in {"edit", "change text", "no", "change", "edit text"}
+                    )
 
                     if pending.get("source") == "text_edit":
-                        # ... execute your logic ...
+
                         if is_confirm:
-                             # ... logic ...
-                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                             continue
+                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                            continue
+
                         elif is_edit:
-                             # ... logic ...
-                             PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
-                             continue
+                            PENDING_TEXT_CONFIRMATIONS.pop(phone, None)
+                            continue
 
                 # -----------------------------------------------------
-                # 🧠 2. PRIORITY: LOGIC BASED ON DETECTED INTENT
+                # 🧠 INTENT BASED FLOWS
                 # -----------------------------------------------------
-                # Now we use the `intent` variable we calculated earlier
 
                 if row or (phone in PENDING_DESIGN_CONFIRMATION) or intent != "unknown":
 
-                    # A. Manual Discussion
                     if intent == "manual_discussion":
-                        print("🎨 Contextual Discussion detected. Tagging Agent.")
-                        #add_contact_tag(phone, 9)
+                        print("🎨 Contextual Discussion detected.")
                         continue
 
-                    # B. Text Changes (Automated)
                     elif intent in ["text", "text_implicit"]:
                         print("▶️ [FLOW] Text Change Logic Started...")
                         reply_msg = row["message"] if row else ""
-                        result = process_text_change_request(phone=phone, customer_text=text, reply_caption=reply_msg)
+
+                        result = process_text_change_request(
+                            phone=phone,
+                            customer_text=text,
+                            reply_caption=reply_msg
+                        )
 
                         if result:
-                            # ... keep your text processing logic ...
                             delta = resolve_text_delta(text, result["semantic_svg"])
                             if delta:
-                                # ... logic ...
                                 continue
 
-                    # C. DELIVERY / GENERAL QUERIES
                     elif intent == "delivery_query":
                         print("🚚 Delivery Query Detected.")
                         continue
 
-                    # D. Manual Design Edits
                     elif intent in ["typography", "color", "design_swap"]:
                         print(f"🎨 Manual Request ({intent}).")
                         continue
 
-                    # E. Layout
                     elif intent == "layout":
                         print("▶️ [FLOW] Layout Change detected.")
-                        success = handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
+                        handle_design_reply(phone, text, row["message"] if row else "", context_whatsapp_id)
                         continue
 
                 # -----------------------------------------------------
-                # ✅ 3. PRIORITY: DESIGN CONFIRMATION
+                # ✅ DESIGN CONFIRMATION
                 # -----------------------------------------------------
-                # ... Keep your existing confirmation logic ...
+
                 if phone in PENDING_DESIGN_CONFIRMATION:
-                     # ... logic ...
-                     pass
+                    pass
+
                 elif not ai_handled and context_whatsapp_id:
-                     # Stateless failsafe logic
-                     is_stateless_confirm = process_design_confirmation(cur, conn, phone, text, context_whatsapp_id)
-                     if is_stateless_confirm:
-                         continue
+
+                    is_stateless_confirm = process_design_confirmation(
+                        cur, conn, phone, text, context_whatsapp_id
+                    )
+
+                    if is_stateless_confirm:
+                        continue
 
                 # -----------------------------------------------------
-                # 🤖 4. FALLBACK: GENERAL AUTOMATION
+                # 🤖 FALLBACK AUTOMATIONS
                 # -----------------------------------------------------
-                # ... Keep automation logic ...
-                run_automations(cur=cur, phone=phone, message_text=text, send_text=send_text_internal)
+
+                run_automations(
+                    cur=cur,
+                    phone=phone,
+                    message_text=text,
+                    send_text=send_text_internal
+                )
 
             except Exception as e:
                 print(f"❌ Message Error: {e}")
                 traceback.print_exc()
 
-        # Update statuses
+        # --------------------------
+        # STATUS UPDATES
+        # --------------------------
+
         for s in value.get("statuses", []):
-            cur.execute("UPDATE messages SET status = %s WHERE whatsapp_id = %s", (s.get("status"), s.get("id")))
+            cur.execute("""
+                UPDATE messages
+                SET status = %s
+                WHERE whatsapp_id = %s
+            """, (s.get("status"), s.get("id")))
+
         conn.commit()
+
         cur.close()
         conn.close()
 
