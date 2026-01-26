@@ -11,7 +11,7 @@ from app.db import get_conn
 from psycopg2.extras import RealDictCursor
 import psycopg2
 import logging
-
+from app.constants import PENDING_DESIGN_CONFIRMATION
 design_sender_bp = Blueprint("design_sender", __name__)
 
 # --- CONFIGURATION ---
@@ -525,7 +525,16 @@ def run_scheduled_automation():
                 )
 
             update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
-
+            send_text_via_meta_and_db(
+                active_phone,
+                "Please confirm text and design.\n"
+                "No changes will be made after confirmation.\n"
+                "If there is any correction - please reply to image for faster response"
+            )
+            PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
+                "ts": time.time(),
+                "source": "auto_design_prompt"
+            }
             move_folder_after_sending(dbx,
                                       item["display_path"],
                                       item["folder_name"])

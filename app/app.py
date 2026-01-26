@@ -741,7 +741,7 @@ def history():
             ON m.context_whatsapp_id = r.whatsapp_id
 
         WHERE
-            m.user_phone = %s
+            RIGHT(m.user_phone,10) = RIGHT(%s,10)
             AND (
                 m.whatsapp_account_id = %s
                 OR m.is_legacy = TRUE
