@@ -225,7 +225,6 @@ def webhook():
 
         if not account_row:
             print("❌ WABA NOT FOUND IN DB:", incoming_waba_id)
-            return "OK", 200
 
         whatsapp_account_id = account_row["id"]
 
@@ -233,8 +232,8 @@ def webhook():
 
         whatsapp_account_id = account_row["id"] if account_row else None
         print("💾 SAVING MESSAGE")
-        print("FROM:", phone)
-        print("TEXT:", text)
+        #print("FROM:", phone)
+        #print("TEXT:", text)
         print("ACCOUNT:", whatsapp_account_id)
         # Capture Contact
         contacts_data = value.get("contacts", [])
