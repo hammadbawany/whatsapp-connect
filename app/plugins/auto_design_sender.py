@@ -13,6 +13,7 @@ import psycopg2
 import logging
 from app.constants import PENDING_DESIGN_CONFIRMATION
 design_sender_bp = Blueprint("design_sender", __name__)
+from app.app import send_text_via_meta_and_db
 
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
@@ -489,20 +490,12 @@ def run_scheduled_automation():
 
                 last_time = responded_recent[short]
 
-                # Force DB timestamp to UTC (Postgres returns naive datetime)
-                if last_time.tzinfo is None:
-                    last_time = last_time.replace(tzinfo=timezone.utc)
-
-                if datetime.now(timezone.utc) - last_time <= timedelta(hours=24):
+                if datetime.now() - last_time <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
                     break
 
-        # ❌ STRICT RULE: NO REPLY = NO SEND
         if not has_recent_reply:
-            logging.warning(f"[CRON DEBUG] Folder phones: {item['phones']}")
-            logging.warning(f"[CRON DEBUG] DB responded phones: {responded_recent}")
-
             logging.warning(f"[CRON] SKIPPED {item['folder_name']} (24h expired)")
             continue
 
@@ -525,8 +518,6 @@ def run_scheduled_automation():
 
             logging.warning(f"[CRON] Sending {item['folder_name']}")
 
-            sent_count = 0
-
             for i, f in enumerate(pngs):
 
                 if i > 0:
@@ -536,7 +527,7 @@ def run_scheduled_automation():
 
                 caption = os.path.splitext(f.name)[0]
 
-                ok = send_file_via_meta_and_db(
+                send_file_via_meta_and_db(
                     active_phone,
                     res.content,
                     f.name,
@@ -544,44 +535,27 @@ def run_scheduled_automation():
                     caption
                 )
 
-                if ok:
-                    sent_count += 1
+            # ✅ Send confirmation message
+            confirm_msg = (
+                "Please confirm text and design.\n"
+                "No changes will be made after confirmation.\n"
+                "If there is any correction - please reply to image for faster response."
+            )
 
+            send_text_via_meta_and_db(active_phone, confirm_msg)
 
-            # ---------------------------
-            # SEND CONFIRMATION MESSAGE
-            # ---------------------------
+            update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
 
-            if sent_count > 0:
+            move_folder_after_sending(
+                dbx,
+                item["display_path"],
+                item["folder_name"]
+            )
 
-                confirmation_text = (
-                    "Please confirm text and design.\n\n"
-                    "No changes will be made after confirmation.\n\n"
-                    "If there is any correction — please reply to image for faster response."
-                )
+            release_lock(item["folder_name"])
 
-                send_text_via_meta_and_db(active_phone, confirmation_text)
+        except Exception as e:
 
-
-            # ---------------------------
-            # MOVE FOLDER AFTER SUCCESS
-            # ---------------------------
-
-            if sent_count == len(pngs):
-
-                update_sent_status(item["folder_name"], f"{sent_count} files", "cron")
-
-                move_folder_after_sending(
-                    dbx,
-                    item["display_path"],
-                    item["folder_name"]
-                )
-
-            else:
-
-                logging.error(
-                    f"[CRON] Partial send — NOT moving folder: {item['folder_name']}"
-                )
-
+            logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
 
             release_lock(item["folder_name"])
