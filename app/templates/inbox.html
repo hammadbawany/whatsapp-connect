@@ -27,6 +27,20 @@
     margin-left: 6px;
 }
 
+.message.legacy {
+    background-color: #2b2b2b;
+    color: #bbb;
+    border: 1px dashed #555;
+    opacity: 0.8;
+}
+
+.message.legacy::after {
+    content: "OLD";
+    font-size: 9px;
+    margin-left: 6px;
+    color: #999;
+}
+
     /* Update Filter Badge Styling */
     /* Filter Bar Container */
     .filter-bar {
@@ -1100,6 +1114,12 @@
 
                 const div = document.createElement('div');
                 div.className = `msg ${isSent ? 'sent' : 'received'}`;
+
+                // 🟤 LEGACY MESSAGE VISUAL TAG
+                if (m.is_legacy === true) {
+                    div.classList.add('legacy');
+                }
+
 
                 // 🔥 ADDED: Set title attribute for hover effect
                 if (m.intent && m.intent !== 'unknown') {

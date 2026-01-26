@@ -581,7 +581,7 @@ def list_users():
                 user_phone,
                 MAX(timestamp) AS last_ts,
                 COUNT(CASE WHEN status = 'received' THEN 1 END) AS unread_count,
-                BOOL_OR(is_legacy) AS is_legacy
+                BOOL_AND(is_legacy) AS is_legacy
             FROM messages
             WHERE whatsapp_account_id = %s
                OR is_legacy = TRUE
