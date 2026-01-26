@@ -455,7 +455,10 @@ def run_scheduled_automation():
 
                 last_time = responded_recent[short]
 
-                # ✅ STRICT LOCAL TIME CHECK
+                # Force DB timestamp to UTC (Postgres returns naive datetime)
+                if last_time.tzinfo is None:
+                    last_time = last_time.replace(tzinfo=timezone.utc)
+
                 if datetime.now(timezone.utc) - last_time <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
