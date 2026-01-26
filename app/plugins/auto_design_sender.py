@@ -78,16 +78,25 @@ def init_log_table():
 def get_system_dropbox_client():
 
     conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, access_token, refresh_token FROM dropbox_accounts LIMIT 1")
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    cur.execute("""
+        SELECT user_id, access_token, refresh_token
+        FROM dropbox_accounts
+        LIMIT 1
+    """)
+
     row = cur.fetchone()
+
     cur.close()
     conn.close()
 
     if not row:
         return None
 
-    uid, at, rt = row[0], row[1], row[2]
+    uid = row["user_id"]
+    at = row["access_token"]
+    rt = row["refresh_token"]
 
     try:
         dbx = dropbox.Dropbox(at)
@@ -98,6 +107,7 @@ def get_system_dropbox_client():
 
         try:
             token_url = "https://api.dropboxapi.com/oauth2/token"
+
             data = {
                 "grant_type": "refresh_token",
                 "refresh_token": rt,
@@ -109,18 +119,26 @@ def get_system_dropbox_client():
             new_at = r.get("access_token")
 
             if not new_at:
+                logging.error("[DROPBOX] Token refresh failed")
                 return None
 
             conn = get_conn()
             cur = conn.cursor()
-            cur.execute("UPDATE dropbox_accounts SET access_token=%s WHERE user_id=%s", (new_at, uid))
+
+            cur.execute("""
+                UPDATE dropbox_accounts
+                SET access_token=%s
+                WHERE user_id=%s
+            """, (new_at, uid))
+
             conn.commit()
             cur.close()
             conn.close()
 
             return dropbox.Dropbox(new_at)
 
-        except:
+        except Exception as e:
+            logging.error(f"[DROPBOX] Auth Error: {e}")
             return None
 
 
