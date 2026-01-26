@@ -280,7 +280,7 @@ def normalize_phone(phone):
 def send_file_via_meta_and_db(phone, file_bytes, filename, mime_type, caption):
 
     phone = normalize_phone(phone)
-    phone = normalize_10(p)
+    phone = normalize_10(phone)
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -431,13 +431,15 @@ def run_scheduled_automation():
             return
 
         cur.execute(f"""
-            SELECT RIGHT(user_phone,10), MAX(timestamp)
+            SELECT
+                RIGHT(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g'), 10) as phone10,
+                MAX(timestamp)
             FROM messages
             WHERE sender='customer'
               AND whatsapp_account_id = %s
               AND is_legacy = FALSE
-              AND RIGHT(user_phone,10) IN ({fmt})
-            GROUP BY RIGHT(user_phone,10)
+              AND RIGHT(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g'), 10) IN ({fmt})
+            GROUP BY phone10
         """, (active_account_id, *all_phones))
 
         for phone10, ts in cur.fetchall():
@@ -474,6 +476,9 @@ def run_scheduled_automation():
 
         # ❌ STRICT RULE: NO REPLY = NO SEND
         if not has_recent_reply:
+            logging.warning(f"[CRON DEBUG] Folder phones: {item['phones']}")
+            logging.warning(f"[CRON DEBUG] DB responded phones: {responded_recent}")
+
             logging.warning(f"[CRON] SKIPPED {item['folder_name']} (24h expired)")
             continue
 
