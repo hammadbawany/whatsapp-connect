@@ -13,7 +13,6 @@ import psycopg2
 import logging
 from app.constants import PENDING_DESIGN_CONFIRMATION
 design_sender_bp = Blueprint("design_sender", __name__)
-from app.app import send_text_via_meta_and_db
 
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
@@ -541,6 +540,7 @@ def run_scheduled_automation():
                 "No changes will be made after confirmation.\n"
                 "If there is any correction - please reply to image for faster response."
             )
+            from app.app import send_text_via_meta_and_db
 
             send_text_via_meta_and_db(active_phone, confirm_msg)
 
