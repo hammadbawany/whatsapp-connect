@@ -525,6 +525,8 @@ def run_scheduled_automation():
 
             logging.warning(f"[CRON] Sending {item['folder_name']}")
 
+            sent_count = 0
+
             for i, f in enumerate(pngs):
 
                 if i > 0:
@@ -534,7 +536,7 @@ def run_scheduled_automation():
 
                 caption = os.path.splitext(f.name)[0]
 
-                send_file_via_meta_and_db(
+                ok = send_file_via_meta_and_db(
                     active_phone,
                     res.content,
                     f.name,
@@ -542,25 +544,44 @@ def run_scheduled_automation():
                     caption
                 )
 
-            update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
-            send_text_via_meta_and_db(
-                active_phone,
-                "Please confirm text and design.\n"
-                "No changes will be made after confirmation.\n"
-                "If there is any correction - please reply to image for faster response"
-            )
-            PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
-                "ts": time.time(),
-                "source": "auto_design_prompt"
-            }
-            move_folder_after_sending(dbx,
-                                      item["display_path"],
-                                      item["folder_name"])
+                if ok:
+                    sent_count += 1
 
-        except Exception as e:
 
-            logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
+            # ---------------------------
+            # SEND CONFIRMATION MESSAGE
+            # ---------------------------
+
+            if sent_count > 0:
+
+                confirmation_text = (
+                    "Please confirm text and design.\n\n"
+                    "No changes will be made after confirmation.\n\n"
+                    "If there is any correction — please reply to image for faster response."
+                )
+
+                send_text_via_meta_and_db(active_phone, confirmation_text)
+
+
+            # ---------------------------
+            # MOVE FOLDER AFTER SUCCESS
+            # ---------------------------
+
+            if sent_count == len(pngs):
+
+                update_sent_status(item["folder_name"], f"{sent_count} files", "cron")
+
+                move_folder_after_sending(
+                    dbx,
+                    item["display_path"],
+                    item["folder_name"]
+                )
+
+            else:
+
+                logging.error(
+                    f"[CRON] Partial send — NOT moving folder: {item['folder_name']}"
+                )
+
 
             release_lock(item["folder_name"])
-
-    logging.warning("[CRON] Finished Cycle")
