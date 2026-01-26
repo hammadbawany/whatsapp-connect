@@ -31,6 +31,23 @@ IGNORED_FOLDERS = [
 ]
 
 MOVE_DESTINATION_BASE = "/1 daniyal/Auto/send to customer"
+def normalize_phone_meta(phone):
+    phone = str(phone).strip()
+
+    phone = phone.replace("+", "").replace(" ", "").replace("-", "")
+
+    # Pakistan handling
+    if phone.startswith("0"):
+        phone = "92" + phone[1:]
+
+    if phone.startswith("92") and len(phone) == 12:
+        return phone
+
+    # Fallback last 10 digits
+    if len(phone) >= 10:
+        return "92" + phone[-10:]
+
+    return phone
 
 def normalize_10(phone):
     p = "".join(filter(str.isdigit, phone))
@@ -281,6 +298,8 @@ def send_file_via_meta_and_db(phone, file_bytes, filename, mime_type, caption):
 
     phone = normalize_phone(phone)
     phone = normalize_10(phone)
+    phone = normalize_phone_meta(phone)
+
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
