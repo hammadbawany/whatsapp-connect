@@ -480,6 +480,8 @@ def run_scheduled_automation():
                 if datetime.now(timezone.utc) - last_time.replace(tzinfo=timezone.utc) <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
+                    logging.warning(f"[DEBUG] phone={short} last_time={last_time} now={datetime.utcnow()}")
+
                     break
 
         if not has_recent_reply:
