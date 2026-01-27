@@ -78,6 +78,8 @@ def normalize_phone_meta(p):
     return None
 
 
+def log_skip(reason, folder, extra=""):
+    logging.warning(f"[SKIP][{reason}] folder={folder} {extra}")
 
 
 # ====================================================
@@ -408,11 +410,13 @@ def run_scheduled_automation():
         name = folder.name.lower()
 
         if any(x in name for x in IGNORED_FOLDERS):
+            log_skip("IGNORED", folder.name)
             continue
 
         parsed = parse_folder_name(folder.name)
 
         if not parsed["phones"]:
+            log_skip("NO_PHONE", folder.name)
             continue
 
         parsed["display_path"] = folder.path_lower
@@ -485,13 +489,26 @@ def run_scheduled_automation():
                     break
 
         if not has_recent_reply:
+            if item["phones"]:
+                for p in item["phones"]:
+                    short = p[-10:]
+                    if short in responded_recent:
+                        log_skip("EXPIRED", item["folder_name"], f"phone={short}")
+                        break
+                else:
+                    log_skip("NO_REPLY", item["folder_name"])
+            else:
+                log_skip("NO_PHONE", item["folder_name"])
+
             continue
+
 
         # ---------------------------
         # LOCK (prevents duplicate cron workers)
         # ---------------------------
 
         if not attempt_to_claim_folder(item["folder_name"], active_phone):
+            log_skip("LOCKED", item["folder_name"])
             continue
 
         sent_any = False
@@ -508,6 +525,8 @@ def run_scheduled_automation():
 
             if not pngs:
                 release_lock(item["folder_name"])
+                log_skip("NO_PNG", item["folder_name"])
+
                 continue
 
             logging.warning(f"[CRON] Sending {item['folder_name']}")
