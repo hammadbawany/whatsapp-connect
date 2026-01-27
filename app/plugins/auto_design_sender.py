@@ -463,7 +463,7 @@ def run_scheduled_automation():
             FROM messages
             WHERE sender = 'customer'
               AND whatsapp_account_id = %s
-              AND is_legacy = FALSE
+              AND (is_legacy = FALSE OR is_legacy IS NULL)
               AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s)
             GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
         """, (active_account_id, phone_list))
