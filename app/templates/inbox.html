@@ -1002,52 +1002,6 @@
         await refreshChat(true);
         chatLoop();
     }
-    function populateOrderDropdown(orders) {
-
-        const box = document.getElementById("order-selector");
-        const select = document.getElementById("order-select");
-
-        if (!box || !select) return;
-
-        select.innerHTML = "";
-
-        orders.forEach((o, idx) => {
-
-            const d = new Date(o.order_date);
-            const label = `${o.order_code} — ${d.toLocaleDateString()}`;
-
-            const opt = document.createElement("option");
-            opt.value = o.order_code;
-            opt.textContent = label;
-
-            if (idx === 0) opt.selected = true;
-
-            select.appendChild(opt);
-        });
-
-        // Show selector
-        box.style.display = "block";
-
-        // --- IMPORTANT FIX ---
-        select.onchange = () => {
-
-            const selectedCode = select.value;
-
-            // Update context
-            currentChatContext.order_code = selectedCode;
-
-            // Update Variable {{2}} input field if exists
-            const var2Input = document.querySelector(
-                '#variable-inputs-container input[data-index="2"]'
-            );
-
-            if (var2Input) {
-                var2Input.value = selectedCode;
-            }
-
-            console.log("Order changed:", selectedCode);
-        };
-    }
 
     async function refreshChat(forceScroll = false) {
             const phoneAtStart = currentPhone;
@@ -1929,6 +1883,67 @@ async function executeSendTemplate(name, lang, bodyText, variableArray) {
         lastTagInteraction = Date.now();
     }
 
+    function populateOrderDropdown(orders) {
+
+        const box = document.getElementById("order-selector");
+        const select = document.getElementById("order-select");
+
+        if (!box || !select) return;
+
+        select.innerHTML = "";
+
+        orders.forEach((o, idx) => {
+
+            const d = new Date(o.order_date);
+            const label = `${o.order_code} — ${d.toLocaleDateString()}`;
+
+            const opt = document.createElement("option");
+            opt.value = o.order_code;
+            opt.textContent = label;
+
+            if (idx === 0) opt.selected = true;
+
+            select.appendChild(opt);
+        });
+
+        box.style.display = "block";
+
+        // ✅ CORRECT PLACE
+        select.onchange = () => {
+
+            const selectedCode = select.value;
+
+            const selectedOrder = orders.find(
+                o => o.order_code === selectedCode
+            );
+
+            if (!selectedOrder) return;
+
+            currentChatContext.order_code = selectedOrder.order_code;
+            currentChatContext.cod_value = selectedOrder.cod_value;
+            currentChatContext.name = selectedOrder.customer_name || currentChatContext.name;
+
+            const var2Input = document.querySelector(
+                '#variable-inputs-container input[data-index="2"]'
+            );
+
+            if (var2Input) {
+                var2Input.value = selectedOrder.order_code;
+            }
+
+            const var4Input = document.querySelector(
+                '#variable-inputs-container input[data-index="4"]'
+            );
+
+            if (var4Input) {
+                var4Input.value = selectedOrder.cod_value
+                    ? "Rs " + selectedOrder.cod_value
+                    : "Rs 0";
+            }
+
+            console.log("ORDER DROPDOWN SWITCH:", currentChatContext);
+        };
+    }
 
 
 
