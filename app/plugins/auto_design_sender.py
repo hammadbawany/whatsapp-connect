@@ -13,6 +13,7 @@ import psycopg2
 import logging
 from app.constants import PENDING_DESIGN_CONFIRMATION
 design_sender_bp = Blueprint("design_sender", __name__)
+from app.app import send_text_via_meta_and_db
 
 # --- CONFIGURATION ---
 APP_KEY = os.getenv("DROPBOX_APP_KEY")
@@ -265,34 +266,18 @@ def move_folder_after_sending(dbx, current_path, folder_name):
 
 def parse_folder_name(folder_name):
 
-    phones = set()
+    nums = re.findall(r'\+?\d{10,15}', folder_name)
 
-    # 🔹 PRIMARY MATCH (structured)
-    for m in re.finditer(r'(?:^|[\s\-_])((?:0092|92|0)?3\d{2})\s*(\d{7})', folder_name):
-        phones.add(m.group(1) + m.group(2))
+    phones = []
 
-    # 🔹 FALLBACK MATCH (any long number anywhere)
-    for m in re.findall(r'(?:0092|92|0)?3\d{9}', folder_name):
-        phones.add(m)
-
-    norm = []
-
-    for p in phones:
-        p = re.sub(r"\D", "", p)
-
-        if p.startswith("0092"):
-            p = p[4:]
-        if p.startswith("03"):
-            p = "92" + p[1:]
-        elif p.startswith("3"):
-            p = "92" + p
-
-        if len(p) == 12:
-            norm.append(p)
+    for n in nums:
+        n = normalize_phone_meta(n)
+        if n:
+            phones.append(n)
 
     return {
         "folder_name": folder_name,
-        "phones": list(set(norm))
+        "phones": list(set(phones))
     }
 
 
@@ -447,7 +432,7 @@ def run_scheduled_automation():
     if all_phones:
 
         conn = get_conn()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
 
         fmt = ",".join(["%s"] * len(all_phones))
 
@@ -459,13 +444,25 @@ def run_scheduled_automation():
 
         cur.execute(f"""
             SELECT
-                RIGHT(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g'), 10) as phone10,
+                RIGHT(
+                  CASE
+                    WHEN REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') LIKE '92%'
+                      THEN SUBSTRING(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') FROM 3)
+                    ELSE REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g')
+                  END,
+                10) as phone10,
                 MAX(timestamp)
             FROM messages
             WHERE sender='customer'
               AND whatsapp_account_id = %s
               AND is_legacy = FALSE
-              AND RIGHT(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g'), 10) IN ({fmt})
+              AND RIGHT(
+                  CASE
+                    WHEN REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') LIKE '92%'
+                      THEN SUBSTRING(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') FROM 3)
+                    ELSE REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g')
+                  END,
+                10) IN ({fmt})
             GROUP BY phone10
         """, (active_account_id, *all_phones))
 
@@ -496,6 +493,7 @@ def run_scheduled_automation():
             if short in responded_recent:
 
                 last_time = responded_recent[short]
+                logging.warning(f"[CRON DEBUG] Checking phone short={short}")
 
                 if datetime.utcnow() - last_time <= timedelta(hours=24):
                     active_phone = p
@@ -503,7 +501,7 @@ def run_scheduled_automation():
                     break
 
         if not has_recent_reply:
-            logging.warning(f"[CRON] SKIPPED {item['folder_name']} (24h expired)")
+            logging.warning(f"[CRON] SKIPPED {item['folder_name']} | phones={item['phones']} | db={responded_recent}")
             continue
 
         if not attempt_to_claim_folder(item["folder_name"], active_phone):
@@ -548,7 +546,6 @@ def run_scheduled_automation():
                 "No changes will be made after confirmation.\n"
                 "If there is any correction - please reply to image for faster response."
             )
-            from app.app import send_text_via_meta_and_db
 
             send_text_via_meta_and_db(active_phone, confirm_msg)
 
