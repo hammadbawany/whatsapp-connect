@@ -31,32 +31,54 @@ IGNORED_FOLDERS = [
 ]
 
 MOVE_DESTINATION_BASE = "/1 daniyal/Auto/send to customer"
-def normalize_phone_meta(phone):
-    phone = str(phone).strip()
+def normalize_phone_meta(p):
+    if not p:
+        return None
 
-    phone = phone.replace("+", "").replace(" ", "").replace("-", "")
+    # 1️⃣ Keep digits only
+    p = "".join(filter(str.isdigit, str(p)))
 
-    # Pakistan handling
-    if phone.startswith("0"):
-        phone = "92" + phone[1:]
-
-    if phone.startswith("92") and len(phone) == 12:
-        return phone
-
-    # Fallback last 10 digits
-    if len(phone) >= 10:
-        return "92" + phone[-10:]
-
-    return phone
-
-def normalize_10(phone):
-    p = "".join(filter(str.isdigit, phone))
-
-    # Remove leading 92 if exists
-    if p.startswith("92") and len(p) > 10:
+    # 2️⃣ Remove international prefix 00 (0092, 00971 etc)
+    if p.startswith("00"):
         p = p[2:]
 
-    return p[-10:]
+    # -------------------------
+    # 🇵🇰 Pakistan Numbers
+    # -------------------------
+
+    # Local mobile format: 03XXXXXXXXX → 92XXXXXXXXXX
+    if p.startswith("03") and len(p) == 11:
+        return "92" + p[1:]
+
+    # Already proper Pakistan international
+    if p.startswith("92") and len(p) == 12:
+        return p
+
+    # -------------------------
+    # 🇦🇪 UAE Numbers
+    # -------------------------
+
+    # UAE local format: 05XXXXXXXX → 971XXXXXXXX
+    if p.startswith("05") and len(p) == 10:
+        return "971" + p[1:]
+
+    # Already international UAE
+    if p.startswith("971") and len(p) >= 11:
+        return p
+
+    # -------------------------
+    # 🌍 Generic International
+    # -------------------------
+
+    # If already long enough — trust it
+    if len(p) >= 11:
+        return p
+
+    # ❌ Reject short garbage numbers
+    return None
+
+
+
 
 # ====================================================
 # DB + DROPBOX HELPERS
@@ -278,20 +300,6 @@ def parse_folder_name(folder_name):
 # WHATSAPP SENDERS
 # ====================================================
 
-def normalize_phone(phone):
-    if not phone:
-        return ""
-    p = re.sub(r"\D", "", str(phone))
-
-    # Pakistan mobile handling
-    if p.startswith("03") and len(p) == 11:
-        return "92" + p[1:]
-
-    # Already international
-    if p.startswith("92") and len(p) == 12:
-        return p
-
-    return p
 
 
 def send_file_via_meta_and_db(phone, file_bytes, filename, mime_type, caption):
@@ -489,7 +497,7 @@ def run_scheduled_automation():
 
                 last_time = responded_recent[short]
 
-                if datetime.now() - last_time <= timedelta(hours=24):
+                if datetime.utcnow() - last_time <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
                     break
