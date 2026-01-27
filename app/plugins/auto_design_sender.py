@@ -370,7 +370,6 @@ def run_scheduled_automation():
 
     logging.warning("[CRON] Auto Design Sender Running")
 
-
     init_log_table()
 
     dbx = get_system_dropbox_client()
@@ -385,14 +384,16 @@ def run_scheduled_automation():
     all_folders = []
 
     for path in TARGET_PATHS:
-
-        res = dbx.files_list_folder(path)
-
-        all_folders.extend(res.entries)
-
-        while res.has_more:
-            res = dbx.files_list_folder_continue(res.cursor)
+        try:
+            res = dbx.files_list_folder(path)
             all_folders.extend(res.entries)
+
+            while res.has_more:
+                res = dbx.files_list_folder_continue(res.cursor)
+                all_folders.extend(res.entries)
+
+        except Exception as e:
+            logging.error(f"[CRON] Dropbox scan error: {e}")
 
     folder_list = [
         f for f in all_folders
@@ -428,17 +429,17 @@ def run_scheduled_automation():
 
     responded_recent = {}
 
-    if not all_phones:
-        logging.warning("[CRON] No valid phones extracted from folders")
-    else:
+    if all_phones:
+
         conn = get_conn()
         cur = conn.cursor()
 
         fmt = ",".join(["%s"] * len(all_phones))
 
         active_account_id = get_active_whatsapp_account_id()
+
         if not active_account_id:
-            logging.error("[CRON] No active WhatsApp account found")
+            logging.error("[CRON] No active WhatsApp account")
             cur.close()
             conn.close()
             return
@@ -475,7 +476,6 @@ def run_scheduled_automation():
             if short in responded_recent:
 
                 last_time = responded_recent[short]
-                logging.warning(f"[CRON DEBUG] Checking phone short={short}")
 
                 if datetime.utcnow() - last_time <= timedelta(hours=24):
                     active_phone = p
@@ -483,11 +483,16 @@ def run_scheduled_automation():
                     break
 
         if not has_recent_reply:
-            logging.warning(f"[CRON] SKIPPED {item['folder_name']} | phones={item['phones']} | db={responded_recent}")
             continue
+
+        # ---------------------------
+        # LOCK (prevents duplicate cron workers)
+        # ---------------------------
 
         if not attempt_to_claim_folder(item["folder_name"], active_phone):
             continue
+
+        sent_any = False
 
         try:
 
@@ -504,6 +509,10 @@ def run_scheduled_automation():
                 continue
 
             logging.warning(f"[CRON] Sending {item['folder_name']}")
+
+            # ---------------------------
+            # SEND FILES
+            # ---------------------------
 
             for i, f in enumerate(pngs):
 
@@ -522,32 +531,52 @@ def run_scheduled_automation():
                     caption
                 )
 
-            # ✅ Send confirmation message
-            confirm_msg = (
-                "Please confirm text and design.\n"
-                "No changes will be made after confirmation.\n"
-                "If there is any correction - please reply to image for faster response."
-            )
-            from app.app import send_text_via_meta_and_db
+                sent_any = True
 
-            send_text_via_meta_and_db(active_phone, confirm_msg)
+            # ---------------------------
+            # SEND CONFIRMATION
+            # ---------------------------
 
+            if sent_any:
 
-            moved = move_folder_after_sending(
-                dbx,
-                item["display_path"],
-                item["folder_name"]
-            )
+                confirm_msg = (
+                    "Please confirm text and design.\n"
+                    "No changes will be made after confirmation.\n"
+                    "If there is any correction - please reply to image for faster response."
+                )
 
-            if moved:
-                update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
-                release_lock(item["folder_name"])
-            else:
-                logging.error(f"[CRON] Move failed, keeping record pending: {item['folder_name']}")
-                release_lock(item["folder_name"])
-                continue
+                from app.app import send_text_via_meta_and_db
+                send_text_via_meta_and_db(active_phone, confirm_msg)
+
+                # ---------------------------
+                # ✅ MARK SENT FIRST (ANTI-SPAM SAFETY)
+                # ---------------------------
+
+                update_sent_status(
+                    item["folder_name"],
+                    f"{len(pngs)} files",
+                    "cron"
+                )
+
+                # ---------------------------
+                # MOVE FOLDER (BEST EFFORT)
+                # ---------------------------
+
+                moved = move_folder_after_sending(
+                    dbx,
+                    item["display_path"],
+                    item["folder_name"]
+                )
+
+                if not moved:
+                    logging.error(f"[CRON] MOVE FAILED AFTER SEND: {item['folder_name']}")
+
+            release_lock(item["folder_name"])
+
         except Exception as e:
 
             logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
 
-            release_lock(item["folder_name"])
+            # Only delete lock if nothing was sent
+            if not sent_any:
+                release_lock(item["folder_name"])
