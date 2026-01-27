@@ -901,6 +901,8 @@
         currentChatContext.name = name || null;
         currentChatContext.order_code = null;
         currentChatContext.order_candidates = [];
+        currentChatContext.cod_value = null;   // ✅ ADD
+
         // =================================================
 
         if (currentPhone === phone) return;
@@ -926,6 +928,7 @@
                 ) {
                     currentChatContext.name = d.orders[0].customer_name;
                 }
+                currentChatContext.cod_value = d.orders[0].cod_value || null;
 
                 // ✅ Show dropdown if multiple orders
                 if (d.count > 1) {

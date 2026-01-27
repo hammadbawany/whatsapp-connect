@@ -415,6 +415,7 @@ def run_scheduled_automation():
     for folder in folder_list:
 
         name = folder.name.lower()
+        logging.warning(f"[FOLDER] name={item['folder_name']} phones={item['phones']}")
 
         if any(x in name for x in IGNORED_FOLDERS):
             log_skip("IGNORED", folder.name)
@@ -491,6 +492,14 @@ def run_scheduled_automation():
             clean_p = re.sub(r'\D', '', p)
             short = clean_p[-10:]
             logging.warning(f"[DEBUG MATCH] folder={item['folder_name']} short={short} in_db={short in responded_recent}")
+            logging.warning(
+                f"[MATCH CHECK] "
+                f"folder={item['folder_name']} | "
+                f"raw={raw_phone} | "
+                f"clean={clean_p} | "
+                f"short={short} | "
+                f"in_db={in_db}"
+            )
 
             if short in responded_recent:
 
@@ -500,7 +509,13 @@ def run_scheduled_automation():
                     active_phone = p
                     has_recent_reply = True
                     logging.warning(f"[DEBUG] phone={short} last_time={last_time} now={datetime.utcnow()}")
-
+                    logging.warning(
+                        f"[TIME CHECK] "
+                        f"phone={short} | "
+                        f"last_reply={last_time_utc} | "
+                        f"now={now_utc} | "
+                        f"diff_hours={round(diff_hours, 2)}"
+                    )
                     break
 
         if not has_recent_reply:
@@ -515,7 +530,12 @@ def run_scheduled_automation():
                     log_skip("NO_REPLY", item["folder_name"])
             else:
                 log_skip("NO_PHONE", item["folder_name"])
-
+            logging.warning(
+                f"[FINAL SKIP] "
+                f"folder={item['folder_name']} | "
+                f"phones={item['phones']} | "
+                f"db_keys={list(responded_recent.keys())}"
+            )
             continue
 
 
