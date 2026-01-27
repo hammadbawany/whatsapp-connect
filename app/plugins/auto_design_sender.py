@@ -457,20 +457,19 @@ def run_scheduled_automation():
         phone_list = list(all_phones)
 
         cur.execute("""
-                SELECT
-              RIGHT(regexp_replace(user_phone, '[^0-9]', '', 'g'), 10),
-              MAX(timestamp)
+            SELECT CAST(RIGHT(user_phone,10) AS TEXT), MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
-              AND RIGHT(regexp_replace(user_phone, '[^0-9]', '', 'g'), 10) = ANY(%s)
-            GROUP BY RIGHT(regexp_replace(user_phone, '[^0-9]', '', 'g'), 10)
+              AND (is_legacy = FALSE OR is_legacy IS NULL)
+              AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s::text[])
+            GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
         """, (phone_list,))
+
+        rows = cur.fetchall()
+
         logging.warning(f"[SQL RAW RESULT] {rows}")
+
         for phone10, ts in rows:
-            responded_recent[phone10] = ts
-
-
-        for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
 
         logging.warning(f"[DEBUG] responded_recent keys = {list(responded_recent.keys())}")
