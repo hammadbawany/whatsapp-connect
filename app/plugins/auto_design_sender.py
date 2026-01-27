@@ -426,8 +426,8 @@ def run_scheduled_automation():
         for p in parsed["phones"]:
             clean = re.sub(r'\D', '', p)
             all_phones.add(str(clean[-10:]))
-        logging.warning(f"[DEBUG] all_phones values = {all_phones}")
-        logging.warning(f"[DEBUG] all_phones types = {[type(x) for x in all_phones]}")
+    logging.warning(f"[DEBUG] all_phones values = {all_phones}")
+    logging.warning(f"[DEBUG] all_phones types = {[type(x) for x in all_phones]}")
 
     # ---------------------------
     # Fetch LAST CUSTOMER reply time
@@ -449,19 +449,21 @@ def run_scheduled_automation():
             cur.close()
             conn.close()
             return
+        phone_list = list(all_phones)
 
-        cur.execute(f"""
+        cur.execute("""
             SELECT RIGHT(user_phone,10), MAX(timestamp)
             FROM messages
-            WHERE sender='customer'
+            WHERE sender = 'customer'
               AND whatsapp_account_id = %s
-              AND (is_legacy = FALSE OR is_legacy IS NULL)
-              AND CAST(RIGHT(user_phone,10) AS TEXT) IN ({fmt})
+              AND is_legacy = FALSE
+              AND RIGHT(user_phone,10) = ANY(%s)
             GROUP BY RIGHT(user_phone,10)
-        """, (active_account_id, *all_phones))
+        """, (active_account_id, phone_list))
 
         for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
+        logging.warning(f"[DEBUG] responded_recent = {responded_recent}")
 
         cur.close()
         conn.close()
