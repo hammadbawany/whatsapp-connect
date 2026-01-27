@@ -386,16 +386,23 @@ def run_scheduled_automation():
     all_folders = []
 
     for path in TARGET_PATHS:
+
         try:
             res = dbx.files_list_folder(path)
+
             all_folders.extend(res.entries)
+
+            batch = 1
+            logging.warning(f"[CRON] Batch {batch}: {len(res.entries)} items")
 
             while res.has_more:
                 res = dbx.files_list_folder_continue(res.cursor)
+                batch += 1
                 all_folders.extend(res.entries)
+                logging.warning(f"[CRON] Batch {batch}: {len(res.entries)} items")
 
         except Exception as e:
-            logging.error(f"[CRON] Dropbox scan error: {e}")
+            logging.error(f"[CRON] Dropbox error: {e}")
 
     folder_list = [
         f for f in all_folders
