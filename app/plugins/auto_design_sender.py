@@ -46,6 +46,11 @@ def normalize_phone_meta(p):
     # 🇵🇰 Pakistan Numbers
     # -------------------------
 
+    # ✅ AUTO-FIX: Missing leading zero (10 digits) → assume 03XXXXXXXXX
+    # Example: 3008204180 → 03008204180
+    if len(p) == 10 and p.startswith("3"):
+        p = "0" + p
+
     # Local mobile format: 03XXXXXXXXX → 92XXXXXXXXXX
     if p.startswith("03") and len(p) == 11:
         return "92" + p[1:]
@@ -76,7 +81,6 @@ def normalize_phone_meta(p):
 
     # ❌ Reject short garbage numbers
     return None
-
 
 def log_skip(reason, folder, extra=""):
     logging.warning(f"[SKIP][{reason}] folder={folder} {extra}")
