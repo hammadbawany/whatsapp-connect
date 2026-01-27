@@ -465,17 +465,15 @@ def run_scheduled_automation():
             GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
         """, (phone_list,))
 
-        try:
-            rows = cur.fetchall()
-            logging.warning(f"[SQL RAW RESULT] {rows}")
-        except Exception as e:
-            logging.error("[CRON] SQL FETCH FAILED: " + str(e))
-            rows = []
+        rows = cur.fetchall()
 
+        logging.warning(f"[SQL RAW RESULT] {rows}")
 
-
-        for phone10, ts in rows:
+        for row in rows:
+            phone10 = row['right']
+            ts = row['max']
             responded_recent[phone10] = ts
+
 
         logging.warning(f"[DEBUG] responded_recent keys = {list(responded_recent.keys())}")
 
