@@ -580,7 +580,17 @@ def run_scheduled_automation():
             # ---------------------------
             # SEND FILES
             # ---------------------------
+            now = datetime.utcnow()
 
+            should_send = False
+            for f in pngs:
+                if (now - f.server_modified) > timedelta(minutes=5):
+                    should_send = True
+                    break
+
+            if not should_send:
+                release_lock(item["folder_name"])
+                continue
             for i, f in enumerate(pngs):
 
                 if i > 0:
@@ -617,6 +627,11 @@ def run_scheduled_automation():
                 from app.app import add_contact_tag
                 add_contact_tag(active_phone, 1)
 
+                PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
+                    "ts": time.time(),
+                    "source": "auto_design_prompt"
+                }
+
                 update_sent_status(
                     item["folder_name"],
                     f"{len(pngs)} files",
@@ -632,7 +647,8 @@ def run_scheduled_automation():
                 if not moved:
                     logging.error(f"[CRON] MOVE FAILED: {item['folder_name']}")
 
-            release_lock(item["folder_name"])
+            if not sent_any:
+                release_lock(item["folder_name"])
 
         except Exception as e:
 
