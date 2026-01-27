@@ -477,7 +477,7 @@ def run_scheduled_automation():
 
                 last_time = responded_recent[short]
 
-                if datetime.utcnow() - last_time <= timedelta(hours=24):
+                if datetime.now(timezone.utc) - last_time.replace(tzinfo=timezone.utc) <= timedelta(hours=24):
                     active_phone = p
                     has_recent_reply = True
                     break
