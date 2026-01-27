@@ -380,7 +380,7 @@ def run_scheduled_automation():
         return
 
     # ---------------------------
-    # Scan Dropbox
+    # Scan Dropbox (FIRST LEVEL)
     # ---------------------------
 
     all_folders = []
@@ -412,10 +412,15 @@ def run_scheduled_automation():
     candidates = []
     all_phones = set()
 
+    # ---------------------------
+    # Parse folders
+    # ---------------------------
+
     for folder in folder_list:
 
+        logging.warning(f"[SCAN] folder_name={folder.name}")
+
         name = folder.name.lower()
-        logging.warning(f"[FOLDER] name={item['folder_name']} phones={item['phones']}")
 
         if any(x in name for x in IGNORED_FOLDERS):
             log_skip("IGNORED", folder.name)
@@ -433,114 +438,109 @@ def run_scheduled_automation():
 
         for p in parsed["phones"]:
             clean = re.sub(r'\D', '', p)
-            all_phones.add(str(clean[-10:]))
-    logging.warning(f"[DEBUG] all_phones values = {all_phones}")
-    logging.warning(f"[DEBUG] all_phones types = {[type(x) for x in all_phones]}")
+            if len(clean) >= 10:
+                all_phones.add(clean[-10:])
+
+    logging.warning(f"[DEBUG] all_phones count={len(all_phones)}")
 
     # ---------------------------
-    # Fetch LAST CUSTOMER reply time
+    # Fetch LAST CUSTOMER reply
     # ---------------------------
 
     responded_recent = {}
 
-    if all_phones and len(all_phones) > 0:
+    if all_phones:
 
         conn = get_conn()
         cur = conn.cursor()
 
-        fmt = ",".join(["%s"] * len(all_phones))
-
-        active_account_id = get_active_whatsapp_account_id()
-
-        if not active_account_id:
-            logging.error("[CRON] No active WhatsApp account")
-            cur.close()
-            conn.close()
-            return
         phone_list = list(all_phones)
 
         cur.execute("""
             SELECT CAST(RIGHT(user_phone,10) AS TEXT), MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
-              AND whatsapp_account_id = %s
               AND (is_legacy = FALSE OR is_legacy IS NULL)
               AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s)
             GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
-        """, (active_account_id, phone_list))
+        """, (phone_list,))
 
         for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
-        logging.warning(f"[DEBUG] responded_recent = {responded_recent}")
-        logging.warning(f"[DEBUG] responded_recent keys = {list(responded_recent.keys())}")
 
+        logging.warning(f"[DEBUG] responded_recent keys = {list(responded_recent.keys())}")
 
         cur.close()
         conn.close()
 
     # ---------------------------
-    # PROCESS
+    # PROCESS FOLDERS
     # ---------------------------
 
-    for item in candidates:
+    for idx, item in enumerate(candidates, start=1):
+
+        logging.warning(
+            f"[FOLDER {idx}/{len(candidates)}] "
+            f"name={item['folder_name']} phones={item['phones']}"
+        )
 
         active_phone = None
         has_recent_reply = False
 
+        # ---------------------------
+        # Match phone
+        # ---------------------------
+
         for p in item["phones"]:
 
+            raw_phone = p
             clean_p = re.sub(r'\D', '', p)
+
+            if len(clean_p) < 10:
+                logging.warning(f"[BAD PHONE] raw={raw_phone}")
+                continue
+
             short = clean_p[-10:]
-            logging.warning(f"[DEBUG MATCH] folder={item['folder_name']} short={short} in_db={short in responded_recent}")
+
+            in_db = short in responded_recent
+
             logging.warning(
                 f"[MATCH CHECK] "
                 f"folder={item['folder_name']} | "
                 f"raw={raw_phone} | "
-                f"clean={clean_p} | "
                 f"short={short} | "
                 f"in_db={in_db}"
             )
 
-            if short in responded_recent:
+            if in_db:
 
                 last_time = responded_recent[short]
 
-                if datetime.now(timezone.utc) - last_time.replace(tzinfo=timezone.utc) <= timedelta(hours=24):
-                    active_phone = p
+                now_utc = datetime.now(timezone.utc)
+
+                last_time_utc = (
+                    last_time if last_time.tzinfo
+                    else last_time.replace(tzinfo=timezone.utc)
+                )
+
+                diff_hours = (now_utc - last_time_utc).total_seconds() / 3600
+
+                logging.warning(
+                    f"[TIME CHECK] "
+                    f"phone={short} diff_hours={round(diff_hours, 2)}"
+                )
+
+                if diff_hours <= 24:
+                    active_phone = raw_phone
                     has_recent_reply = True
-                    logging.warning(f"[DEBUG] phone={short} last_time={last_time} now={datetime.utcnow()}")
-                    logging.warning(
-                        f"[TIME CHECK] "
-                        f"phone={short} | "
-                        f"last_reply={last_time_utc} | "
-                        f"now={now_utc} | "
-                        f"diff_hours={round(diff_hours, 2)}"
-                    )
                     break
 
         if not has_recent_reply:
-            if item["phones"]:
-                for p in item["phones"]:
-                    clean_p = re.sub(r'\D', '', p)
-                    short = clean_p[-10:]
-                    if short in responded_recent:
-                        log_skip("EXPIRED", item["folder_name"], f"phone={short}")
-                        break
-                else:
-                    log_skip("NO_REPLY", item["folder_name"])
-            else:
-                log_skip("NO_PHONE", item["folder_name"])
-            logging.warning(
-                f"[FINAL SKIP] "
-                f"folder={item['folder_name']} | "
-                f"phones={item['phones']} | "
-                f"db_keys={list(responded_recent.keys())}"
-            )
+            log_skip("NO_REPLY", item["folder_name"])
             continue
 
-
         # ---------------------------
-        # LOCK (prevents duplicate cron workers)
+        # LOCK
         # ---------------------------
 
         if not attempt_to_claim_folder(item["folder_name"], active_phone):
@@ -560,12 +560,11 @@ def run_scheduled_automation():
             ]
 
             if not pngs:
-                release_lock(item["folder_name"])
                 log_skip("NO_PNG", item["folder_name"])
-
+                release_lock(item["folder_name"])
                 continue
 
-            logging.warning(f"[CRON] Sending {item['folder_name']}")
+            logging.warning(f"[SEND START] {item['folder_name']}")
 
             # ---------------------------
             # SEND FILES
@@ -605,19 +604,11 @@ def run_scheduled_automation():
                 from app.app import send_text_via_meta_and_db
                 send_text_via_meta_and_db(active_phone, confirm_msg)
 
-                # ---------------------------
-                # ✅ MARK SENT FIRST (ANTI-SPAM SAFETY)
-                # ---------------------------
-
                 update_sent_status(
                     item["folder_name"],
                     f"{len(pngs)} files",
                     "cron"
                 )
-
-                # ---------------------------
-                # MOVE FOLDER (BEST EFFORT)
-                # ---------------------------
 
                 moved = move_folder_after_sending(
                     dbx,
@@ -626,7 +617,7 @@ def run_scheduled_automation():
                 )
 
                 if not moved:
-                    logging.error(f"[CRON] MOVE FAILED AFTER SEND: {item['folder_name']}")
+                    logging.error(f"[CRON] MOVE FAILED: {item['folder_name']}")
 
             release_lock(item["folder_name"])
 
@@ -634,6 +625,5 @@ def run_scheduled_automation():
 
             logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
 
-            # Only delete lock if nothing was sent
             if not sent_any:
                 release_lock(item["folder_name"])
