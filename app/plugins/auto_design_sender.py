@@ -532,16 +532,20 @@ def run_scheduled_automation():
 
             send_text_via_meta_and_db(active_phone, confirm_msg)
 
-            update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
 
-            move_folder_after_sending(
+            moved = move_folder_after_sending(
                 dbx,
                 item["display_path"],
                 item["folder_name"]
             )
 
-            release_lock(item["folder_name"])
-
+            if moved:
+                update_sent_status(item["folder_name"], f"{len(pngs)} files", "cron")
+                release_lock(item["folder_name"])
+            else:
+                logging.error(f"[CRON] Move failed, keeping record pending: {item['folder_name']}")
+                release_lock(item["folder_name"])
+                continue
         except Exception as e:
 
             logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
