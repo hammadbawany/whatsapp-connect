@@ -614,6 +614,8 @@ def run_scheduled_automation():
 
                 from app.app import send_text_via_meta_and_db
                 send_text_via_meta_and_db(active_phone, confirm_msg)
+                from app.app import add_contact_tag
+                add_contact_tag(active_phone, 1)
 
                 update_sent_status(
                     item["folder_name"],
