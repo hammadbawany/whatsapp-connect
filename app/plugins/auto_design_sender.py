@@ -488,7 +488,8 @@ def run_scheduled_automation():
 
         for p in item["phones"]:
 
-            short = p[-10:]
+            clean_p = re.sub(r'\D', '', p)
+            short = clean_p[-10:]
             logging.warning(f"[DEBUG MATCH] folder={item['folder_name']} short={short} in_db={short in responded_recent}")
 
             if short in responded_recent:
@@ -505,7 +506,8 @@ def run_scheduled_automation():
         if not has_recent_reply:
             if item["phones"]:
                 for p in item["phones"]:
-                    short = p[-10:]
+                    clean_p = re.sub(r'\D', '', p)
+                    short = clean_p[-10:]
                     if short in responded_recent:
                         log_skip("EXPIRED", item["folder_name"], f"phone={short}")
                         break
