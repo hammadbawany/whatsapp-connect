@@ -415,7 +415,7 @@ def run_scheduled_automation():
         if not parsed["phones"]:
             continue
 
-        parsed["display_path"] = folder.path_display
+        parsed["display_path"] = folder.path_lower
 
         candidates.append(parsed)
 
