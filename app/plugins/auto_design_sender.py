@@ -465,6 +465,7 @@ def run_scheduled_automation():
               AND RIGHT(regexp_replace(user_phone, '[^0-9]', '', 'g'), 10) = ANY(%s)
             GROUP BY RIGHT(regexp_replace(user_phone, '[^0-9]', '', 'g'), 10)
         """, (phone_list,))
+        logging.warning("[SQL RAW RESULT] " + str(cur.fetchall()))
 
 
         for phone10, ts in cur.fetchall():
