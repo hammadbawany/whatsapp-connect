@@ -4427,7 +4427,8 @@ def get_remote_orders_by_phone(phone):
                 customer_name,
                 customer_address,
                 customer_city,
-                order_date
+                order_date,
+                cod_amount
             FROM orders
             WHERE REPLACE(REPLACE(REPLACE(customer_phone,' ',''),'-',''),'+','') LIKE %s
             ORDER BY order_date DESC
@@ -4446,7 +4447,9 @@ def get_remote_orders_by_phone(phone):
                 "name": row["customer_name"],
                 "address": row["customer_address"],
                 "city": row["customer_city"],
-                "order_date": row["order_date"]
+                "order_date": row["order_date"],
+                "cod_value": row["cod_amount"]
+
             })
 
         cur.close()
@@ -4481,19 +4484,22 @@ def sync_orders_by_phone(phone):
             o["name"],
             o["address"],
             o["city"],
-            o["order_date"]
+            o["order_date"],
+            o["cod_value"]
+
         ))
 
     upsert_query = """
         INSERT INTO cached_order_info
-        (order_code, customer_phone, customer_name, customer_address, customer_city, order_date)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        (order_code, customer_phone, customer_name, customer_address, customer_city, order_date,cod_value)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (order_code) DO UPDATE SET
             customer_phone = EXCLUDED.customer_phone,
             customer_name = EXCLUDED.customer_name,
             customer_address = EXCLUDED.customer_address,
             customer_city = EXCLUDED.customer_city,
             order_date = EXCLUDED.order_date,
+            cod_value = EXCLUDED.cod_value,
             updated_at = NOW()
     """
 
@@ -4523,7 +4529,8 @@ def last_orders():
             order_code,
             customer_name,
             customer_city,
-            order_date
+            order_date,
+            cod_value
         FROM cached_order_info
         WHERE REPLACE(REPLACE(REPLACE(customer_phone,' ',''),'-',''),'+','') LIKE %s
           AND order_date > NOW() - INTERVAL '14 days'

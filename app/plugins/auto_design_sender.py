@@ -471,6 +471,8 @@ def run_scheduled_automation():
         for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
         logging.warning(f"[DEBUG] responded_recent = {responded_recent}")
+        logging.warning(f"[DEBUG] responded_recent keys = {list(responded_recent.keys())}")
+
 
         cur.close()
         conn.close()
@@ -487,6 +489,7 @@ def run_scheduled_automation():
         for p in item["phones"]:
 
             short = p[-10:]
+            logging.warning(f"[DEBUG MATCH] folder={item['folder_name']} short={short} in_db={short in responded_recent}")
 
             if short in responded_recent:
 

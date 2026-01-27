@@ -1548,7 +1548,12 @@
             if (varNum === '2' && currentChatContext.order_code) {
                 prefill = currentChatContext.order_code;
             }
-
+            if (varNum === '3') {
+                prefill = "8-9 days";
+            }
+            if (varNum === '4' && currentChatContext.cod_value) {
+                prefill = currentChatContext.cod_value;
+            }
             wrapper.innerHTML =
                 '<label style="font-size:12px; color:#00a884; font-weight:bold;">' +
                     'Variable ' + varLabel +
