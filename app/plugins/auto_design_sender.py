@@ -428,49 +428,32 @@ def run_scheduled_automation():
 
     responded_recent = {}
 
-    if all_phones:
-
+    if not all_phones:
+        logging.warning("[CRON] No valid phones extracted from folders")
+    else:
         conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur = conn.cursor()
 
         fmt = ",".join(["%s"] * len(all_phones))
 
         active_account_id = get_active_whatsapp_account_id()
-
         if not active_account_id:
             logging.error("[CRON] No active WhatsApp account found")
+            cur.close()
+            conn.close()
             return
 
         cur.execute(f"""
-            SELECT
-                RIGHT(
-                  CASE
-                    WHEN REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') LIKE '92%'
-                      THEN SUBSTRING(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') FROM 3)
-                    ELSE REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g')
-                  END,
-                10) as phone10,
-                MAX(timestamp)
+            SELECT RIGHT(user_phone,10), MAX(timestamp)
             FROM messages
             WHERE sender='customer'
               AND whatsapp_account_id = %s
               AND is_legacy = FALSE
-              AND RIGHT(
-                  CASE
-                    WHEN REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') LIKE '92%'
-                      THEN SUBSTRING(REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g') FROM 3)
-                    ELSE REGEXP_REPLACE(user_phone, '[^0-9]', '', 'g')
-                  END,
-                10) IN ({fmt})
-            GROUP BY phone10
+              AND RIGHT(user_phone,10) IN ({fmt})
+            GROUP BY RIGHT(user_phone,10)
         """, (active_account_id, *all_phones))
 
-        rows = cur.fetchall()
-
-        for r in rows:
-            phone10 = r["phone10"]
-            ts = r["max"]
-
+        for phone10, ts in cur.fetchall():
             responded_recent[phone10] = ts
 
         cur.close()
