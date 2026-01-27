@@ -435,7 +435,7 @@ def run_scheduled_automation():
 
     responded_recent = {}
 
-    if all_phones:
+    if all_phones and len(all_phones) > 0:
 
         conn = get_conn()
         cur = conn.cursor()
@@ -452,13 +452,13 @@ def run_scheduled_automation():
         phone_list = list(all_phones)
 
         cur.execute("""
-            SELECT RIGHT(user_phone,10), MAX(timestamp)
+            SELECT CAST(RIGHT(user_phone,10) AS TEXT), MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
               AND whatsapp_account_id = %s
               AND is_legacy = FALSE
-              AND RIGHT(user_phone,10) = ANY(%s)
-            GROUP BY RIGHT(user_phone,10)
+              AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s)
+            GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
         """, (active_account_id, phone_list))
 
         for phone10, ts in cur.fetchall():
