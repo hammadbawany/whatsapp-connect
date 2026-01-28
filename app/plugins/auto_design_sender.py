@@ -568,28 +568,26 @@ def run_scheduled_automation():
                 if isinstance(f, dropbox.files.FileMetadata)
                 and f.name.lower().endswith(".png")
             ], key=lambda x: x.name.lower())
+
             if not pngs:
                 log_skip("NO_PNG", item["folder_name"])
-                release_lock(item["folder_name"])
-                continue
+                return_lock = True
+                raise Exception("NO_PNG")
 
             logging.warning(f"[SEND START] {item['folder_name']}")
 
             # ---------------------------
-            # SEND FILES
+            # PNG AGE SAFETY
             # ---------------------------
+
             now = datetime.utcnow()
 
-            should_send = False
             for f in pngs:
-                if (now - f.server_modified) > timedelta(minutes=5):
-                    should_send = False
-                    break
+                age = (now - f.server_modified).total_seconds()
+                if age < 300:
+                    logging.warning(f"[PNG TOO NEW] {f.name} age={int(age)}s")
+                    raise Exception("PNG_TOO_NEW")
 
-            if not should_send:
-                logging.warning(f"[SKIP DELAY] PNG too new — will retry next run: {item['folder_name']}")
-                release_lock(item["folder_name"])
-                continue
             # ---------------------------
             # SEND ALL PNG FILES
             # ---------------------------
@@ -602,55 +600,31 @@ def run_scheduled_automation():
                 if i > 0:
                     time.sleep(10)
 
-                try:
+                _, res = dbx.files_download(f.path_lower)
 
-                    _, res = dbx.files_download(f.path_lower)
+                caption = os.path.splitext(f.name)[0]
 
-                    caption = os.path.splitext(f.name)[0]
-
-                    send_file_via_meta_and_db(
-                        active_phone,
-                        res.content,
-                        f.name,
-                        "image/png",
-                        caption
-                    )
-
-                    sent_count += 1
-
-                    logging.warning(
-                        f"[PNG SENT] {sent_count}/{total_pngs} {f.name}"
-                    )
-
-                except Exception as e:
-
-                    logging.error(
-                        f"[PNG FAILED] folder={item['folder_name']} file={f.name} err={e}"
-                    )
-
-                    break
-
-
-            # ---------------------------
-            # VERIFY ALL PNG SENT
-            # ---------------------------
-
-            logging.warning(
-                f"[MOVE CHECK] sent={sent_count} total={total_pngs} folder={item['folder_name']}"
-            )
-
-            if sent_count != total_pngs:
-
-                logging.error(
-                    f"[ABORT MOVE] Only {sent_count}/{total_pngs} sent for {item['folder_name']}"
+                send_file_via_meta_and_db(
+                    active_phone,
+                    res.content,
+                    f.name,
+                    "image/png",
+                    caption
                 )
 
-                release_lock(item["folder_name"])
-                continue
+                sent_count += 1
 
+                logging.warning(f"[PNG SENT] {sent_count}/{total_pngs} {f.name}")
 
             # ---------------------------
-            # MOVE FOLDER
+            # VERIFY ALL SENT
+            # ---------------------------
+
+            if sent_count != total_pngs:
+                raise Exception(f"SEND_MISMATCH {sent_count}/{total_pngs}")
+
+            # ---------------------------
+            # MOVE FOLDER (ONLY AFTER SUCCESS)
             # ---------------------------
 
             logging.warning(f"[MOVE READY] {item['folder_name']}")
@@ -662,14 +636,10 @@ def run_scheduled_automation():
             )
 
             if not moved:
-
-                logging.error(f"[MOVE FAILED] {item['folder_name']}")
-                release_lock(item["folder_name"])
-                continue
-
+                raise Exception("MOVE_FAILED")
 
             # ---------------------------
-            # MARK SENT (AFTER MOVE)
+            # MARK SENT
             # ---------------------------
 
             update_sent_status(
@@ -678,42 +648,36 @@ def run_scheduled_automation():
                 "cron"
             )
 
-
             # ---------------------------
             # SEND CONFIRMATION
             # ---------------------------
 
-            try:
+            time.sleep(10)
 
-                time.sleep(10)
+            confirm_msg = (
+                "Please confirm text and design.\n"
+                "No changes will be made after confirmation.\n"
+                "If there is any correction - please reply to image for faster response."
+            )
 
-                confirm_msg = (
-                    "Please confirm text and design.\n"
-                    "No changes will be made after confirmation.\n"
-                    "If there is any correction - please reply to image for faster response."
-                )
+            from app.app import send_text_via_meta_and_db
+            send_text_via_meta_and_db(active_phone, confirm_msg)
 
-                from app.app import send_text_via_meta_and_db
-                send_text_via_meta_and_db(active_phone, confirm_msg)
+            from app.app import add_contact_tag
+            add_contact_tag(active_phone, 1)
 
-                from app.app import add_contact_tag
-                add_contact_tag(active_phone, 1)
+            PENDING_DESIGN_CONFIRMATION[normalize_phone_meta(active_phone)] = {
+                "ts": time.time(),
+                "source": "auto_design_prompt"
+            }
 
-                PENDING_DESIGN_CONFIRMATION[normalize_phone_meta(active_phone)] = {
-                    "ts": time.time(),
-                    "source": "auto_design_prompt"
-                }
+            logging.warning(f"[SUCCESS] {item['folder_name']}")
 
-                logging.warning(f"[CONFIRM SENT] {item['folder_name']}")
-                # ---------------------------
-                # RELEASE LOCK (SUCCESS)
-                # ---------------------------
+        except Exception as e:
 
-                release_lock(item["folder_name"])
-            except Exception as e:
+            logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
 
-                logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
+        finally:
 
-            finally:
-
-                release_lock(item["folder_name"])
+            # ALWAYS RELEASE LOCK
+            release_lock(item["folder_name"])
