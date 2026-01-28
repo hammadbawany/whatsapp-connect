@@ -464,7 +464,6 @@ def run_scheduled_automation():
             SELECT CAST(RIGHT(user_phone,10) AS TEXT), MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
-              AND whatsapp_account_id = %s
               AND (is_legacy = FALSE OR is_legacy IS NULL)
               AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s::text[])
             GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
