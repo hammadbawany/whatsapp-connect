@@ -1059,7 +1059,7 @@ if os.environ.get("ENABLE_CRON") == "true":
 
             scheduler = BackgroundScheduler()
             # Run every 5 minutes
-            scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=4)
+            scheduler.add_job(func=run_scheduled_automation, trigger="interval", minutes=1)
             scheduler.start()
 
             # Shut down scheduler when app exits
