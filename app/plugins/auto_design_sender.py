@@ -464,6 +464,7 @@ def run_scheduled_automation():
             SELECT CAST(RIGHT(user_phone,10) AS TEXT), MAX(timestamp)
             FROM messages
             WHERE sender = 'customer'
+              AND whatsapp_account_id = %s
               AND (is_legacy = FALSE OR is_legacy IS NULL)
               AND CAST(RIGHT(user_phone,10) AS TEXT) = ANY(%s::text[])
             GROUP BY CAST(RIGHT(user_phone,10) AS TEXT)
@@ -505,13 +506,13 @@ def run_scheduled_automation():
         for p in item["phones"]:
 
             raw_phone = p
-            clean_p = re.sub(r'\D', '', p)
+            normalized = normalize_phone_meta(p)
 
-            if len(clean_p) < 10:
-                logging.warning(f"[BAD PHONE] raw={raw_phone}")
+            if not normalized:
+                logging.warning(f"[BAD PHONE] raw={p}")
                 continue
 
-            short = clean_p[-10:]
+            short = normalized[-10:]
 
             in_db = short in responded_recent
 
@@ -589,6 +590,7 @@ def run_scheduled_automation():
                     break
 
             if not should_send:
+                logging.warning(f"[SKIP DELAY] PNG too new — will retry next run: {item['folder_name']}")
                 release_lock(item["folder_name"])
                 continue
             for i, f in enumerate(pngs):
@@ -616,6 +618,8 @@ def run_scheduled_automation():
 
             if sent_any:
 
+                time.sleep(10)
+
                 confirm_msg = (
                     "Please confirm text and design.\n"
                     "No changes will be made after confirmation.\n"
@@ -624,20 +628,23 @@ def run_scheduled_automation():
 
                 from app.app import send_text_via_meta_and_db
                 send_text_via_meta_and_db(active_phone, confirm_msg)
+
                 from app.app import add_contact_tag
                 add_contact_tag(active_phone, 1)
 
-                PENDING_DESIGN_CONFIRMATION[normalize_phone(active_phone)] = {
+                PENDING_DESIGN_CONFIRMATION[normalize_phone_meta(active_phone)] = {
                     "ts": time.time(),
                     "source": "auto_design_prompt"
                 }
 
+                # ✅ Mark DB first
                 update_sent_status(
                     item["folder_name"],
                     f"{len(pngs)} files",
                     "cron"
                 )
 
+                # ✅ MOVE ONLY ONCE — LAST STEP
                 moved = move_folder_after_sending(
                     dbx,
                     item["display_path"],
@@ -646,6 +653,7 @@ def run_scheduled_automation():
 
                 if not moved:
                     logging.error(f"[CRON] MOVE FAILED: {item['folder_name']}")
+
 
             if not sent_any:
                 release_lock(item["folder_name"])
