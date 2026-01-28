@@ -558,18 +558,16 @@ def run_scheduled_automation():
             log_skip("LOCKED", item["folder_name"])
             continue
 
-        sent_any = False
 
         try:
 
             files = dbx.files_list_folder(item["display_path"]).entries
 
-            pngs = [
+            pngs = sorted([
                 f for f in files
                 if isinstance(f, dropbox.files.FileMetadata)
                 and f.name.lower().endswith(".png")
-            ]
-
+            ], key=lambda x: x.name.lower())
             if not pngs:
                 log_skip("NO_PNG", item["folder_name"])
                 release_lock(item["folder_name"])
@@ -585,37 +583,107 @@ def run_scheduled_automation():
             should_send = False
             for f in pngs:
                 if (now - f.server_modified) > timedelta(minutes=5):
-                    should_send = True
+                    should_send = False
                     break
 
             if not should_send:
                 logging.warning(f"[SKIP DELAY] PNG too new — will retry next run: {item['folder_name']}")
                 release_lock(item["folder_name"])
                 continue
+            # ---------------------------
+            # SEND ALL PNG FILES
+            # ---------------------------
+
+            total_pngs = len(pngs)
+            sent_count = 0
+
             for i, f in enumerate(pngs):
 
                 if i > 0:
                     time.sleep(10)
 
-                _, res = dbx.files_download(f.path_lower)
+                try:
 
-                caption = os.path.splitext(f.name)[0]
+                    _, res = dbx.files_download(f.path_lower)
 
-                send_file_via_meta_and_db(
-                    active_phone,
-                    res.content,
-                    f.name,
-                    "image/png",
-                    caption
+                    caption = os.path.splitext(f.name)[0]
+
+                    send_file_via_meta_and_db(
+                        active_phone,
+                        res.content,
+                        f.name,
+                        "image/png",
+                        caption
+                    )
+
+                    sent_count += 1
+
+                    logging.warning(
+                        f"[PNG SENT] {sent_count}/{total_pngs} {f.name}"
+                    )
+
+                except Exception as e:
+
+                    logging.error(
+                        f"[PNG FAILED] folder={item['folder_name']} file={f.name} err={e}"
+                    )
+
+                    break
+
+
+            # ---------------------------
+            # VERIFY ALL PNG SENT
+            # ---------------------------
+
+            logging.warning(
+                f"[MOVE CHECK] sent={sent_count} total={total_pngs} folder={item['folder_name']}"
+            )
+
+            if sent_count != total_pngs:
+
+                logging.error(
+                    f"[ABORT MOVE] Only {sent_count}/{total_pngs} sent for {item['folder_name']}"
                 )
 
-                sent_any = True
+                release_lock(item["folder_name"])
+                continue
+
+
+            # ---------------------------
+            # MOVE FOLDER
+            # ---------------------------
+
+            logging.warning(f"[MOVE READY] {item['folder_name']}")
+
+            moved = move_folder_after_sending(
+                dbx,
+                item["display_path"],
+                item["folder_name"]
+            )
+
+            if not moved:
+
+                logging.error(f"[MOVE FAILED] {item['folder_name']}")
+                release_lock(item["folder_name"])
+                continue
+
+
+            # ---------------------------
+            # MARK SENT (AFTER MOVE)
+            # ---------------------------
+
+            update_sent_status(
+                item["folder_name"],
+                f"{sent_count} files",
+                "cron"
+            )
+
 
             # ---------------------------
             # SEND CONFIRMATION
             # ---------------------------
 
-            if sent_any:
+            try:
 
                 time.sleep(10)
 
@@ -636,30 +704,16 @@ def run_scheduled_automation():
                     "source": "auto_design_prompt"
                 }
 
-                # ✅ Mark DB first
-                update_sent_status(
-                    item["folder_name"],
-                    f"{len(pngs)} files",
-                    "cron"
-                )
+                logging.warning(f"[CONFIRM SENT] {item['folder_name']}")
+                # ---------------------------
+                # RELEASE LOCK (SUCCESS)
+                # ---------------------------
 
-                # ✅ MOVE ONLY ONCE — LAST STEP
-                moved = move_folder_after_sending(
-                    dbx,
-                    item["display_path"],
-                    item["folder_name"]
-                )
-
-                if not moved:
-                    logging.error(f"[CRON] MOVE FAILED: {item['folder_name']}")
-
-
-            if not sent_any:
                 release_lock(item["folder_name"])
+            except Exception as e:
 
-        except Exception as e:
+                logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
 
-            logging.error(f"[CRON ERROR] {item['folder_name']} : {e}")
+            finally:
 
-            if not sent_any:
                 release_lock(item["folder_name"])
