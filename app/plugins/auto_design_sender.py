@@ -425,6 +425,13 @@ def run_scheduled_automation():
         logging.warning(f"[SCAN] folder_name={folder.name}")
 
         name = folder.name.lower()
+        # ---------------------------
+        # 🚫 BLOCK INCOMPLETE FOLDERS
+        # ---------------------------
+
+        if "incomplete" in name:
+            log_skip("INCOMPLETE", folder.name)
+            continue
 
         if any(x in name for x in IGNORED_FOLDERS):
             log_skip("IGNORED", folder.name)
