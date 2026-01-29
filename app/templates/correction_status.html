@@ -3,20 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <title>Correction 24h Window</title>
+    <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f0f2f5; font-family: 'Segoe UI', sans-serif; }
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', sans-serif; scroll-behavior: smooth; }
         .card { border: none; box-shadow: 0 2px 5px rgba(0,0,0,0.1); border-radius: 10px; }
         .header-title { color: #008069; font-weight: 700; }
         .badge-timer { font-size: 0.95em; font-family: monospace; }
+
+        /* Status Borders */
         .urgent { border-left: 5px solid #dc3545; background-color: #fff5f5; }
-        .safe { border-left: 5px solid #198754; }
+        .needs-reply { border-left: 5px solid #fd7e14; background-color: #fff; }
+        .design-sent { border-left: 5px solid #0d6efd; background-color: #f0f8ff; }
         .no-chat { border-left: 5px solid #212529; }
         .expired { border-left: 5px solid #6c757d; background-color: #f8f9fa; opacity: 0.85; }
-        .stat-card { text-align: center; padding: 20px; }
-        .stat-num { font-size: 2rem; font-weight: bold; }
-        .path-box { font-size: 0.75em; color: #6c757d; background: #e9ecef; padding: 4px 8px; border-radius: 4px; display: block; margin-top: 5px; font-family: monospace; word-break: break-all; }
+        .call-required { border-left: 5px solid #ffc107; background-color: #fffae6; }
+
+        /* Summary Cards */
+        .stat-card {
+            text-align: center;
+            padding: 15px 5px;
+            transition: transform 0.2s;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .stat-num { font-size: 1.8rem; font-weight: bold; line-height: 1.2; }
+        .stat-label { font-size: 0.8rem; font-weight: 600; margin-top: 5px; }
+        .summary-link { text-decoration: none; color: inherit; display: block; height: 100%; }
+        .summary-link:hover .stat-card { transform: translateY(-5px); box-shadow: 0 5px 15px rgba(0,0,0,0.15); }
+
+        /* Section Dividers */
+        .section-header { margin-top: 40px; margin-bottom: 20px; font-weight: 700; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; }
+
+        .path-box { font-size: 0.75em; color: #6c757d; background: rgba(0,0,0,0.05); padding: 4px 8px; border-radius: 4px; display: block; margin-top: 5px; font-family: monospace; word-break: break-all; }
         .badge-folder { font-size: 0.75em; background-color: #607d8b; color: white; margin-bottom: 5px; display: inline-block; }
     </style>
 </head>
@@ -31,149 +54,301 @@
         <a href="/auto_correction_status" class="btn btn-outline-success"><i class="bi bi-arrow-clockwise"></i> Refresh</a>
     </div>
 
-    <!-- Summary -->
-    <div class="row mb-4">
-        <div class="col-md-3">
-            <div class="card stat-card text-danger">
-                <div class="stat-num">{{ urgent_count }}</div>
-                <div>Urgent (< 4h left)</div>
-            </div>
+    <!-- SUMMARY CARDS (Reordered) -->
+    <div class="row mb-4 g-2">
+
+        <!-- 1. CALL REQUIRED (Now First) -->
+        <div class="col-md-2 col-6">
+            <a href="#call-section" class="summary-link">
+                <div class="card stat-card text-warning"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="Customers tagged for Follow-up (#1) where chat expired > 24h.">
+                    <div class="stat-num">{{ call_required_count|default(0) }}</div>
+                    <div class="stat-label">Expired chats - Call required</div>
+                </div>
+            </a>
         </div>
-        <div class="col-md-3">
-            <div class="card stat-card text-success">
-                <div class="stat-num">{{ active_count }}</div>
-                <div>Active Window</div>
-            </div>
+
+        <!-- 2. URGENT -->
+        <div class="col-md-2 col-6">
+            <a href="#urgent-section" class="summary-link">
+                <div class="card stat-card text-danger"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="Customer sent the last message. Window closes in LESS than 4 hours.">
+                    <div class="stat-num">{{ urgent_count }}</div>
+                    <div class="stat-label">Urgent (< 4h)</div>
+                </div>
+            </a>
         </div>
-        <div class="col-md-3">
-            <div class="card stat-card text-dark">
-                <div class="stat-num">{{ no_chat_count }}</div>
-                <div>No Chat History</div>
-            </div>
+
+        <!-- 3. NEEDS REPLY -->
+        <div class="col-md-2 col-6">
+            <a href="#needs-reply-section" class="summary-link">
+                <div class="card stat-card" style="color: #fd7e14;"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="Customer sent the last message. Window is open for MORE than 4 hours.">
+                    <div class="stat-num">{{ needs_reply_count }}</div>
+                    <div class="stat-label">Needs Reply</div>
+                </div>
+            </a>
         </div>
-        <div class="col-md-3">
-            <div class="card stat-card text-secondary">
-                <div class="stat-num">{{ expired_count }}</div>
-                <div>Window Closed</div>
-            </div>
+
+        <!-- 4. DESIGN SENT -->
+        <div class="col-md-2 col-6">
+            <a href="#design-sent-section" class="summary-link">
+                <div class="card stat-card text-primary"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="You sent the last message (Media, Design, or Confirmation). Waiting for customer.">
+                    <div class="stat-num">{{ design_sent_count }}</div>
+                    <div class="stat-label">Design Sent</div>
+                </div>
+            </a>
+        </div>
+
+        <!-- 5. NO CHAT -->
+        <div class="col-md-2 col-6">
+            <a href="#no-chat-section" class="summary-link">
+                <div class="card stat-card text-dark"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="Folder phone number not found in WhatsApp database.">
+                    <div class="stat-num">{{ no_chat_count }}</div>
+                    <div class="stat-label">No Chat History</div>
+                </div>
+            </a>
+        </div>
+
+        <!-- 6. WINDOW CLOSED -->
+        <div class="col-md-2 col-6">
+            <a href="#expired-section" class="summary-link">
+                <div class="card stat-card text-secondary"
+                     data-bs-toggle="tooltip" data-bs-placement="bottom"
+                     title="24h Window is closed. Last customer message was > 24 hours ago.">
+                    <div class="stat-num">{{ expired_count }}</div>
+                    <div class="stat-label">Window Closed</div>
+                </div>
+            </a>
         </div>
     </div>
 
-    <!-- UNPARSED -->
+    <!-- TABLE 1: CHECK MANUALLY (Unparsed) -->
     {% if unparsed_list %}
-    <div class="card border-danger mb-4">
-        <div class="card-header bg-danger text-white">
-            <h5 class="mb-0"><i class="bi bi-hand-index-thumb"></i> Check Manually (Unparsed Folders)</h5>
-        </div>
-        <div class="card-body">
-            <ul class="list-group">
-                {% for item in unparsed_list %}
-                <li class="list-group-item">
-                    <div class="d-flex justify-content-between">
-                        <span class="text-danger fw-bold">{{ item.name }}</span>
-                        <span class="badge bg-secondary">{{ item.parent }}</span>
-                    </div>
-                    <small class="path-box">{{ item.full_path }}</small>
-                </li>
-                {% endfor %}
-            </ul>
+    <div id="unparsed-section">
+        <h5 class="section-header text-danger"><i class="bi bi-hand-index-thumb"></i> 1. Check Manually (Unparsed)</h5>
+        <div class="card border-danger mb-4">
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    {% for item in unparsed_list %}
+                    <li class="list-group-item">
+                        <div class="d-flex justify-content-between">
+                            <span class="text-danger fw-bold">{{ item.name }}</span>
+                            <span class="badge bg-secondary">{{ item.parent }}</span>
+                        </div>
+                        <small class="path-box">{{ item.full_path }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
         </div>
     </div>
     {% endif %}
 
-    <!-- ACTIVE WINDOWS -->
-    {% if active_list %}
-    <h5 class="mb-3 text-success fw-bold">🟢 Open Windows (Reply Priority)</h5>
-    <div class="row">
-        {% for item in active_list %}
-        <div class="col-12 mb-2">
-            <div class="card p-3 {{ 'urgent' if item.hours_left < 4 else 'safe' }}">
-                <div class="d-flex justify-content-between align-items-start">
-                    <div style="flex: 1; padding-right: 10px;">
-                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
-                        <h5 class="mb-1">{{ item.customer_name }}</h5>
-                        <div class="text-muted small">
-                            <i class="bi bi-folder"></i> {{ item.order_code }} |
-                            <i class="bi bi-phone"></i> {{ item.phone }}
+    <!-- TABLE 2: CALL REQUIRED (Moved Up) -->
+    {% if call_required_list %}
+    <div id="call-section">
+        <h5 class="section-header text-warning">📞 2. Expired chats - Call required (Tag #1)</h5>
+        <div class="row">
+            {% for item in call_required_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 call-required">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-1 fw-bold">{{ item.user_phone }}</h6>
+                            <div class="text-muted small"><i class="bi bi-clock-history"></i> Last Msg: {{ item.last_customer_message_time }}</div>
+                            <div class="text-danger small mt-1"><i class="bi bi-exclamation-circle-fill"></i> Window closed > 24h</div>
                         </div>
-                        <div class="mt-1" style="font-size: 0.85em; color: #555;">
-                            <i class="bi bi-clock-history"></i> Last Msg: <strong>{{ item.last_msg_time }}</strong>
+                        <div>
+                            <a href="tel:{{ item.user_phone }}" class="btn btn-sm btn-warning me-2"><i class="bi bi-telephone-fill"></i> Call</a>
+                            <a href="/inbox?phone={{ item.user_phone }}" target="_blank" class="btn btn-sm btn-outline-dark">Open Chat</a>
                         </div>
-                        <span class="path-box">{{ item.full_path }}</span>
-                    </div>
-                    <div class="text-end" style="min-width: 140px;">
-                        <div class="badge {{ 'bg-danger' if item.hours_left < 4 else 'bg-success' }} badge-timer mb-2">
-                            <i class="bi bi-hourglass-split"></i> {{ item.time_str }} Left
-                        </div>
-                        <br>
-                        <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-primary">
-                            Open Chat <i class="bi bi-box-arrow-up-right"></i>
-                        </a>
                     </div>
                 </div>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
     {% endif %}
 
-    <!-- NO CHAT HISTORY -->
+    <!-- TABLE 3: URGENT -->
+    {% if urgent_list %}
+    <div id="urgent-section">
+        <h5 class="section-header text-danger">🔴 3. Urgent (Reply Needed < 4h)</h5>
+        <div class="row">
+            {% for item in urgent_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 urgent">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div style="flex: 1; padding-right: 10px;">
+                            <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                            <span class="badge bg-danger mb-1">Customer Waiting</span>
+                            <h5 class="mb-1">{{ item.customer_name }}</h5>
+                            <div class="text-muted small">
+                                <i class="bi bi-folder"></i> {{ item.order_code }} | <i class="bi bi-phone"></i> {{ item.phone }}
+                            </div>
+                            <div class="mt-2 text-dark small">
+                                <strong>Customer:</strong> (Waiting for reply) <span class="text-muted ms-2">{{ item.last_msg_time }}</span>
+                            </div>
+                            <span class="path-box">{{ item.full_path }}</span>
+                        </div>
+                        <div class="text-end" style="min-width: 140px;">
+                            <div class="badge bg-danger badge-timer mb-2"><i class="bi bi-hourglass-split"></i> {{ item.time_str }} Left</div>
+                            <br>
+                            <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-primary">Open Chat</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- TABLE 4: NEEDS REPLY -->
+    {% if needs_reply_list %}
+    <div id="needs-reply-section">
+        <h5 class="section-header" style="color: #fd7e14;">🟠 4. Needs Reply (> 4h Left)</h5>
+        <div class="row">
+            {% for item in needs_reply_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 needs-reply">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div style="flex: 1; padding-right: 10px;">
+                            <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                            <span class="badge bg-warning text-dark mb-1">Needs Reply</span>
+                            <h5 class="mb-1">{{ item.customer_name }}</h5>
+                            <div class="text-muted small">
+                                <i class="bi bi-folder"></i> {{ item.order_code }} | <i class="bi bi-phone"></i> {{ item.phone }}
+                            </div>
+                            <div class="mt-2 text-dark small">
+                                <strong>Customer:</strong> (Waiting for reply) <span class="text-muted ms-2">{{ item.last_msg_time }}</span>
+                            </div>
+                            <span class="path-box">{{ item.full_path }}</span>
+                        </div>
+                        <div class="text-end" style="min-width: 140px;">
+                            <div class="badge bg-success badge-timer mb-2"><i class="bi bi-hourglass-split"></i> {{ item.time_str }} Left</div>
+                            <br>
+                            <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-primary">Open Chat</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- TABLE 5: DESIGN SENT -->
+    {% if design_sent_list %}
+    <div id="design-sent-section">
+        <h5 class="section-header text-primary">🔵 5. Design Sent (Waiting on Customer)</h5>
+        <div class="row">
+            {% for item in design_sent_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 design-sent">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div style="flex: 1; padding-right: 10px;">
+                            <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                            <span class="badge bg-primary mb-1">Design/Info Sent</span>
+                            <h5 class="mb-1">{{ item.customer_name }}</h5>
+                            <div class="text-muted small">
+                                <i class="bi bi-folder"></i> {{ item.order_code }} | <i class="bi bi-phone"></i> {{ item.phone }}
+                            </div>
+                            <div class="mt-2 p-2 bg-white border rounded small">
+                                <strong class="text-primary">You:</strong> {{ item.last_msg_snippet }}
+                                <span class="text-muted ms-2 float-end">{{ item.last_msg_time }}</span>
+                            </div>
+                            <span class="path-box">{{ item.full_path }}</span>
+                        </div>
+                        <div class="text-end" style="min-width: 140px;">
+                            <div class="badge bg-success badge-timer mb-2"><i class="bi bi-hourglass-split"></i> {{ item.time_str }} Left</div>
+                            <br>
+                            <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-primary">Open Chat</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- TABLE 6: NO CHAT HISTORY -->
     {% if no_chat_list %}
-    <h5 class="mt-5 mb-3 text-dark fw-bold">❓ No Chat History (Check Manually)</h5>
-    <div class="row">
-        {% for item in no_chat_list %}
-        <div class="col-12 mb-2">
-            <div class="card p-3 no-chat">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div style="overflow: hidden;">
-                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
-                        <h6 class="mb-1 fw-bold text-truncate">{{ item.customer_name }}</h6>
-                        <span class="badge bg-dark">{{ item.order_code }}</span>
-                        <span class="ms-2 text-muted small"><i class="bi bi-phone"></i> {{ item.phone }}</span>
-                        <span class="path-box mt-2">{{ item.full_path }}</span>
-                    </div>
-                    <div>
-                        <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-outline-dark">
-                            Check Inbox
-                        </a>
+    <div id="no-chat-section">
+        <h5 class="section-header text-dark">❓ 6. No Chat History</h5>
+        <div class="row">
+            {% for item in no_chat_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 no-chat">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div style="overflow: hidden;">
+                            <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                            <h6 class="mb-1 fw-bold">{{ item.customer_name }}</h6>
+                            <span class="badge bg-dark">{{ item.order_code }}</span>
+                            <span class="ms-2 text-muted small"><i class="bi bi-phone"></i> {{ item.phone }}</span>
+                            <span class="path-box mt-2">{{ item.full_path }}</span>
+                        </div>
+                        <div>
+                            <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-outline-dark">Check Inbox</a>
+                        </div>
                     </div>
                 </div>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
     {% endif %}
 
-    <!-- EXPIRED -->
+    <!-- TABLE 7: WINDOW CLOSED -->
     {% if expired_list %}
-    <h5 class="mt-5 mb-3 text-secondary fw-bold">🔒 Window Closed (Send Template)</h5>
-    <div class="row">
-        {% for item in expired_list %}
-        <div class="col-12 mb-2">
-            <div class="card p-3 expired">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div style="overflow: hidden;">
-                        <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
-                        <h6 class="mb-1 text-muted">{{ item.customer_name }}</h6>
-                        <div class="text-muted small">
-                            <span class="badge bg-secondary">{{ item.order_code }}</span>
-                            <span class="ms-1"><i class="bi bi-clock"></i> Last Msg: {{ item.last_msg_time }}</span>
+    <div id="expired-section">
+        <h5 class="section-header text-secondary">🔒 7. Window Closed (Expired)</h5>
+        <div class="row">
+            {% for item in expired_list %}
+            <div class="col-12 mb-2">
+                <div class="card p-3 expired">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div style="overflow: hidden;">
+                            <span class="badge rounded-pill badge-folder">{{ item.parent_folder }}</span>
+                            <h6 class="mb-1 text-muted">{{ item.customer_name }}</h6>
+                            <div class="text-muted small">
+                                <span class="badge bg-secondary">{{ item.order_code }}</span>
+                                <span class="ms-1"><i class="bi bi-clock"></i> Last Cust Msg: {{ item.last_msg_time }}</span>
+                            </div>
+                            <span class="path-box mt-2">{{ item.full_path }}</span>
                         </div>
-                        <span class="path-box mt-2">{{ item.full_path }}</span>
-                    </div>
-                    <div>
-                        <span class="text-danger small me-3 fw-bold">Expired {{ item.time_str }} ago</span>
-                        <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-outline-secondary">
-                            Open Chat
-                        </a>
+                        <div>
+                            <span class="text-danger small me-3 fw-bold">Expired {{ item.time_str }} ago</span>
+                            <a href="/inbox?phone={{ item.phone }}" target="_blank" class="btn btn-sm btn-outline-secondary">Open Chat</a>
+                        </div>
                     </div>
                 </div>
             </div>
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
     {% endif %}
 
 </div>
+
+<!-- REQUIRED JAVASCRIPT FOR TOOLTIPS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    document.addEventListener("DOMContentLoaded", function(){
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        })
+    });
+</script>
 </body>
 </html>

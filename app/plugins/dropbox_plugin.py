@@ -676,7 +676,7 @@ def auto_no_response():
         unparsed=unparsed_folders
     )
 
-
+'''
 @dropbox_bp.route("/auto_correction_status")
 def auto_correction_status():
     if "user_id" not in session: return redirect("/login")
@@ -823,7 +823,251 @@ def auto_correction_status():
         no_chat_count=len(no_chat_list),
         unparsed_count=len(unparsed_list)
     )
+'''
+@dropbox_bp.route("/auto_correction_status")
+def auto_correction_status():
+    if "user_id" not in session: return redirect("/login")
 
+    user_id = session["user_id"]
+    dbx = get_user_dropbox_client(user_id)
+
+    # 1. Define Paths
+    target_paths = [
+        "/1 daniyal/Auto/send to customer/Correction done",
+        "/1 daniyal/Auto/send to customer/Faraz Corrections",
+        "/1 daniyal/Auto/send to customer/no reply",
+        "/1 daniyal/Auto/send to customer"
+    ]
+
+    # 2. Get Folders
+    folders_data = {}
+    for path in target_paths:
+        current_names = get_all_dropbox_folders(dbx, path)
+        parent_name = path.split("/")[-1]
+        for name in current_names:
+            if name.lower() in ["instagram", "no reply", "confirm", "file issues", "cancelled orders", "correction done", "faraz corrections"]:
+                continue
+            folders_data[name] = {
+                "name": name,
+                "parent": parent_name,
+                "full_path": path + "/" + name
+            }
+
+    parsed_folders = []
+    unparsed_list = []
+    all_candidate_phones = set()
+
+    for name, info in folders_data.items():
+        data = parse_folder_data(name)
+        data["parent_folder"] = info["parent"]
+        data["full_path"] = info["full_path"]
+        if data["phones"]:
+            parsed_folders.append(data)
+            for p in data["phones"]: all_candidate_phones.add(p[-10:])
+        else:
+            unparsed_item = {"name": name, "full_path": info["full_path"], "parent": info["parent"]}
+            unparsed_list.append(unparsed_item)
+
+    # 3. Check DB
+    chat_status_map = {}
+
+    if all_candidate_phones:
+        conn = get_conn()
+        cur = conn.cursor()
+        check_list = list(all_candidate_phones)
+        format_strings = ','.join(['%s'] * len(check_list))
+
+        query = f"""
+            SELECT
+                RIGHT(m.user_phone, 10) as short_phone,
+                m.sender,
+                m.message,
+                CASE WHEN m.media_url IS NOT NULL THEN 1 ELSE 0 END as has_media,
+                m.timestamp as action_ts,
+                (
+                    SELECT MAX(sub.timestamp)
+                    FROM messages sub
+                    WHERE sub.user_phone = m.user_phone
+                    AND sub.sender = 'customer'
+                ) as last_cust_ts
+            FROM messages m
+            INNER JOIN (
+                SELECT user_phone, MAX(timestamp) as max_ts
+                FROM messages
+                WHERE RIGHT(user_phone, 10) IN ({format_strings})
+                GROUP BY user_phone
+            ) latest ON m.user_phone = latest.user_phone AND m.timestamp = latest.max_ts
+        """
+
+        try:
+            cur.execute(query, tuple(check_list))
+            rows = cur.fetchall()
+            for row in rows:
+                if isinstance(row, dict):
+                    short_p = row['short_phone']
+                    sender = row['sender']
+                    msg_content = row.get('message', '') or ''
+                    has_media = row['has_media']
+                    action_ts = row['action_ts']
+                    cust_ts = row['last_cust_ts']
+                else:
+                    short_p = row[0]
+                    sender = row[1]
+                    msg_content = row[2] or ''
+                    has_media = row[3]
+                    action_ts = row[4]
+                    cust_ts = row[5]
+
+                chat_status_map[short_p] = {
+                    'sender': sender,
+                    'message': msg_content.lower(),
+                    'has_media': has_media,
+                    'action_ts': action_ts,
+                    'cust_ts': cust_ts
+                }
+        except Exception as e:
+            print(f"Error fetching chat status: {e}")
+        cur.close(); conn.close()
+
+    # 4. Separate Lists
+    urgent_list = []      # Needs reply < 4h
+    needs_reply_list = [] # Needs reply > 4h
+    design_sent_list = [] # We replied
+    expired_list = []
+    no_chat_list = []
+
+    now_utc = datetime.utcnow()
+
+    for item in parsed_folders:
+        active_phone = item["phones"][0]
+        match_info = None
+
+        for p in item["phones"]:
+            short_p = p[-10:]
+            if short_p in chat_status_map:
+                match_info = chat_status_map[short_p]
+                active_phone = p
+                break
+
+        display_data = {
+            "phone": active_phone,
+            "order_code": item["order_code"],
+            "customer_name": item["customer_name"],
+            "folder_name": item["folder_name"],
+            "full_path": item["full_path"],
+            "parent_folder": item["parent_folder"],
+            "status": "pending",
+            "last_msg_snippet": ""
+        }
+
+        if match_info and match_info['cust_ts']:
+            cust_ts = match_info['cust_ts']
+
+            # Display Time
+            pkt_action_time = match_info['action_ts'] + timedelta(hours=5)
+            display_data["last_msg_time"] = pkt_action_time.strftime("%d %b %I:%M %p")
+
+            # 24h Window
+            window_close_time = cust_ts + timedelta(hours=24)
+            time_left = window_close_time - now_utc
+            total_seconds = time_left.total_seconds()
+
+            if total_seconds > 0:
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                display_data["time_str"] = f"{hours}h {minutes}m"
+                display_data["seconds_left"] = total_seconds
+                display_data["hours_left"] = hours
+
+                # --- ACTIVE CATEGORIZATION ---
+                if match_info['sender'] != 'customer':
+                    # WE sent last
+                    msg_text = match_info['message']
+                    is_media = match_info['has_media']
+
+                    # Logic: Is it a design/confirm msg?
+                    is_confirm = (
+                        "confirm" in msg_text or
+                        "design" in msg_text or
+                        "we are waiting for you" in msg_text
+                    )
+
+                    display_data["status"] = "design_sent"
+                    if is_media:
+                        display_data["last_msg_snippet"] = "Media Sent"
+                    elif is_confirm:
+                        display_data["last_msg_snippet"] = "Confirmation Text Sent"
+                    else:
+                        display_data["last_msg_snippet"] = "Replied (Other)"
+
+                    design_sent_list.append(display_data)
+
+                else:
+                    # CUSTOMER sent last (Needs Reply)
+                    display_data["status"] = "needs_reply"
+                    if hours < 4:
+                        urgent_list.append(display_data)
+                    else:
+                        needs_reply_list.append(display_data)
+
+            else:
+                # EXPIRED
+                expired_seconds = abs(total_seconds)
+                hours = int(expired_seconds // 3600)
+                display_data["time_str"] = f"{hours}h"
+                display_data["seconds_expired"] = expired_seconds
+                expired_list.append(display_data)
+        else:
+            no_chat_list.append(display_data)
+
+    # SORTING
+    urgent_list.sort(key=lambda x: x["seconds_left"])
+    needs_reply_list.sort(key=lambda x: x["seconds_left"])
+    design_sent_list.sort(key=lambda x: x["seconds_left"])
+    expired_list.sort(key=lambda x: x["seconds_expired"])
+
+    # 5. Call Required
+    call_required_list = []
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("""
+            WITH last_messages AS (
+                SELECT DISTINCT ON (user_phone) user_phone, sender, "timestamp"
+                FROM messages WHERE whatsapp_account_id = 42 ORDER BY user_phone, "timestamp" DESC
+            )
+            SELECT lm.user_phone, lm."timestamp" FROM last_messages lm
+            JOIN contact_tags ct ON ct.contact_phone = lm.user_phone
+            WHERE lm.sender = 'customer' AND lm."timestamp" < NOW() - INTERVAL '24 hours' AND ct.tag_id = 1;
+        """)
+        for row in cur.fetchall():
+            pkt_time = row['timestamp'] + timedelta(hours=5)
+            call_required_list.append({
+                'user_phone': row['user_phone'],
+                'last_customer_message_time': pkt_time.strftime("%d %b %I:%M %p")
+            })
+    except: pass
+    cur.close(); conn.close()
+
+    return render_template(
+        "correction_status.html",
+        # Lists
+        unparsed_list=unparsed_list,
+        urgent_list=urgent_list,
+        needs_reply_list=needs_reply_list,
+        design_sent_list=design_sent_list,
+        no_chat_list=no_chat_list,
+        expired_list=expired_list,
+        call_required_list=call_required_list,
+
+        # Counts
+        urgent_count=len(urgent_list),
+        needs_reply_count=len(needs_reply_list),
+        design_sent_count=len(design_sent_list),
+        no_chat_count=len(no_chat_list),
+        expired_count=len(expired_list),
+        call_required_count=len(call_required_list)
+    )
 # ==========================================
 # SYSTEM DROPBOX CLIENT (FOR AUTOMATIONS)
 # ==========================================
